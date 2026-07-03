@@ -45,7 +45,7 @@ Visit the live app. Signals are already cooking. Connect your wallet and pay $0.
 ┌──────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │   Frontend   │    │     Backend      │    │  Autonomous     │
 │  React+Vite  │◄──►│  Express+SQLite  │◄───│     Agent       │
-│   Port 5173  │    │   Port 3009      │    │   node-cron     │
+│   Port 5173  │    │   Port 3011      │    │   node-cron     │
 │              │    │   WebSocket      │    │   Groq AI       │
 └──────────────┘    └──────────────────┘    └────────┬────────┘
          │                    │                      │
@@ -190,7 +190,7 @@ npm run dev
 
 **Ports:**
 - Frontend: http://localhost:5173
-- Backend: http://localhost:3009
+- Backend: http://localhost:3011
 
 ---
 
@@ -199,7 +199,7 @@ npm run dev
 Three options built into the modal:
 1. **Continue with Google** — Circle creates Arc wallet automatically
 2. **Continue with Email** — Circle creates Arc wallet automatically
-3. **Connect Existing Wallet** — MetaMask/WalletConnect
+3. **Connect Existing Wallet** — MetaMask, WalletConnect, or any EVM wallet
 
 Returning users reconnect with same email → same wallet, same USDC balance.
 
@@ -215,7 +215,7 @@ Returning users reconnect with same email → same wallet, same USDC balance.
 | `/api/unlock` | POST | Verify payment, unlock signal |
 | `/api/stats` | GET | Platform statistics |
 
-WebSocket: `ws://localhost:3009` — real-time signal push
+WebSocket: `ws://localhost:3011` — real-time signal push
 
 ---
 
