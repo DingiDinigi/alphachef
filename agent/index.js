@@ -5,7 +5,7 @@ const { ethers } = require('ethers');
 const Groq = require('groq-sdk');
 const { v4: uuidv4 } = require('uuid');
 
-const BACKEND_URL = `http://localhost:${process.env.PORT || 3009}`;
+const BACKEND_URL = `http://localhost:${process.env.PORT || 3010}`;
 const AGENT_SECRET = process.env.AGENT_SECRET || 'alphachef-agent-secret-2024';
 const ARC_RPC = process.env.ARC_RPC_URL || 'https://rpc.testnet.arc.fun';
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || '';
@@ -30,7 +30,10 @@ const WHALE_ADDRESSES = [
 
 async function initChain() {
   try {
-    provider = new ethers.JsonRpcProvider(ARC_RPC);
+    // Pin a static network so ethers does not endlessly retry auto-detection
+    // when the Arc RPC endpoint is unreachable (keeps mock mode quiet + cheap).
+    const arcNetwork = ethers.Network.from({ chainId: 5042002, name: 'arc' });
+    provider = new ethers.JsonRpcProvider(ARC_RPC, arcNetwork, { staticNetwork: arcNetwork });
     if (process.env.PRIVATE_KEY) {
       wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
     }
