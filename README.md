@@ -1,4 +1,4 @@
-# AlphaChef 🍳
+# AlphaChef 👨‍🍳
 
 > **Built for Lepton Hackathon — Circle × Canteen**
 
@@ -128,7 +128,7 @@ The agent runs every 5 minutes and monitors:
 
 ```
 [INFO] ⚡ Agent connected to Arc testnet
-[INFO] 🍳 AlphaChef agent loop starting...
+[INFO] 👨‍🍳 AlphaChef agent loop starting...
 [INFO] Found 5 raw signals
 [INFO] Publishing HIGH signal from 3 sources — $0.05 USDC
 [INFO] ✅ Published signal: EIGEN — Smart Money + Accumulation + GitHub Converge [HIGH] $0.05 USDC
