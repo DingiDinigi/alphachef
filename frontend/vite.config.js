@@ -6,9 +6,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:3010',
-      '/socket.io': { target: 'http://localhost:3010', ws: true },
-      '/ws': { target: 'ws://localhost:3010', ws: true },
+      '/api': 'http://localhost:3011',
+      '/socket.io': { target: 'http://localhost:3011', ws: true },
+      '/ws': { target: 'ws://localhost:3011', ws: true },
     },
   },
 });

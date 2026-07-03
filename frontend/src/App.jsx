@@ -26,7 +26,7 @@ export default function App() {
     fetchStats();
 
     const wsHost = window.location.hostname || 'localhost';
-    const ws = new WebSocket(`ws://${wsHost}:3010`);
+    const ws = new WebSocket(`ws://${wsHost}:3011`);
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
       if (msg.type === 'new_signal') {

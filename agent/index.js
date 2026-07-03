@@ -5,7 +5,7 @@ const { ethers } = require('ethers');
 const Groq = require('groq-sdk');
 const { v4: uuidv4 } = require('uuid');
 
-const BACKEND_URL = `http://localhost:${process.env.PORT || 3010}`;
+const BACKEND_URL = `http://localhost:${process.env.PORT || 3011}`;
 const AGENT_SECRET = process.env.AGENT_SECRET || 'alphachef-agent-secret-2024';
 const ARC_RPC = process.env.ARC_RPC_URL || 'https://rpc.testnet.arc.fun';
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || '';
