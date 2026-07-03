@@ -7,7 +7,7 @@
 [![Live](https://img.shields.io/badge/LIVE-alphachef.site-c9a227?style=for-the-badge)](https://alphachef.site)
 [![Arc Testnet](https://img.shields.io/badge/Arc-Testnet-4ade80?style=for-the-badge)](https://rpc.testnet.arc.fun)
 [![Circle x402](https://img.shields.io/badge/Circle-x402-blue?style=for-the-badge)](https://developers.circle.com)
-[![GitHub](https://img.shields.io/badge/GitHub-DingiDingi%2Falphachef-white?style=for-the-badge&logo=github)](https://github.com/DingiDingi/alphachef)
+[![GitHub](https://img.shields.io/badge/GitHub-DingiDinigi%2Falphachef-white?style=for-the-badge&logo=github)](https://github.com/DingiDinigi/alphachef)
 
 ---
 
@@ -170,7 +170,7 @@ The agent runs every 5 minutes and monitors:
 
 ```bash
 # Clone
-git clone https://github.com/DingiDingi/alphachef.git
+git clone https://github.com/DingiDinigi/alphachef.git
 cd alphachef
 
 # Environment
