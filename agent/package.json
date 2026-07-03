@@ -1,0 +1,17 @@
+{
+  "name": "alphachef-agent",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.11.1",
+    "groq-sdk": "^0.3.3",
+    "node-cron": "^3.0.3",
+    "uuid": "^9.0.1"
+  }
+}

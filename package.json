@@ -1,0 +1,15 @@
+{
+  "name": "alphachef",
+  "version": "1.0.0",
+  "description": "Autonomous on-chain alpha signal platform on Arc",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:agent\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && node server.js",
+    "dev:agent": "cd agent && node index.js",
+    "dev:frontend": "cd frontend && npm run dev",
+    "install:all": "npm install && cd backend && npm install && cd ../agent && npm install && cd ../frontend && npm install && cd ../contracts && npm install"
+  },
+  "dependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
