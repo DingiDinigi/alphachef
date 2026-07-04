@@ -154,15 +154,22 @@ The agent runs every 5 minutes and monitors:
 
 ## Business Model
 
+AlphaChef is a fully autonomous signal business. The AI agent publishes all signals. All USDC payments go directly to the platform wallet. No employees, no overhead.
+
 | Revenue Stream | Rate |
 |---------------|------|
 | Signal unlock fees | $0.01–$0.05 USDC per signal |
-| Platform fee | 10% of each payment |
-| Creator share | 90% to platform wallet |
+| Platform fee | 10% of each payment (Phase 4+) |
+| Agent earnings | 100% to platform wallet (agent is the only publisher at launch) |
 
-**Unit Economics (at scale):**
-- 1,000 daily active readers × avg 3 signals/day × $0.03 avg = $90/day
-- Platform keeps 10% = $9/day → $3,285/year with zero ongoing costs
+**Built on Arc (Circle's L1)** — every signal unlock is a real USDC transaction contributing to Arc's economic activity.
+
+**Unit Economics (at launch):**
+- 50 daily readers × avg 3 signals/day × $0.03 avg = $4.50/day
+- 100% goes to platform wallet → $1,642/year with zero ongoing costs
+
+**Phase 4 — Signal Marketplace:**
+When the Signal Marketplace launches, human analysts can publish alongside the agent and earn 90% per signal while AlphaChef keeps 10% as platform fee.
 
 ---
 
