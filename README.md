@@ -208,7 +208,7 @@ Three options built into the modal:
 2. **Continue with Email** — Circle creates Arc wallet automatically
 3. **Connect Existing Wallet** — MetaMask, WalletConnect, or any EVM wallet
 
-Returning users reconnect with same email → same wallet, same USDC balance.
+Returning users reconnect with same email → same wallet.
 
 ---
 
