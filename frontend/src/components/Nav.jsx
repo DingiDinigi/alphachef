@@ -1,4 +1,15 @@
+import { Link, useLocation } from 'react-router-dom';
+
 export default function Nav({ onConnect, wallet }) {
+  const { pathname } = useLocation();
+  const base = pathname === '/feed' ? '/' : '';
+
+  const hashLinks = [
+    { label: 'How It Works', hash: 'how-it-works' },
+    { label: 'The Agent', hash: 'the-agent' },
+    { label: 'Roadmap', hash: 'roadmap' },
+  ];
+
   return (
     <nav style={{
       position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100,
@@ -7,16 +18,19 @@ export default function Nav({ onConnect, wallet }) {
       background: 'rgba(10,10,8,0.92)', backdropFilter: 'blur(16px)',
       borderBottom: '1px solid var(--border)',
     }}>
-      <a href="#" style={{ display: 'flex', alignItems: 'center', gap: 11, textDecoration: 'none' }}>
+      <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: 11, textDecoration: 'none' }}>
         <span style={{ fontFamily: '"Playfair Display", serif', fontSize: 19, fontWeight: 700, color: 'var(--white)', letterSpacing: '-0.3px' }}>
           AlphaChef
         </span>
-      </a>
+      </Link>
       <div style={{ display: 'flex', gap: 36, alignItems: 'center' }}>
-        {['Feed', 'How It Works', 'The Agent', 'Roadmap'].map(link => (
-          <a key={link} href={`#${link.toLowerCase().replace(/ /g, '-')}`}
+        <Link to="/feed" style={{ fontSize: 13, fontWeight: 500, color: 'var(--dim)', textDecoration: 'none' }}>
+          Feed
+        </Link>
+        {hashLinks.map(({ label, hash }) => (
+          <a key={hash} href={`${base}#${hash}`}
             style={{ fontSize: 13, fontWeight: 500, color: 'var(--dim)', textDecoration: 'none' }}>
-            {link}
+            {label}
           </a>
         ))}
       </div>

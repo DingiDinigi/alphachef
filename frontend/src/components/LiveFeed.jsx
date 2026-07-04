@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom';
+
 const BADGE_STYLES = {
   HIGH: { background: 'rgba(201,162,39,.12)', color: 'var(--gold)', border: '1px solid rgba(201,162,39,.26)' },
   MEDIUM: { background: 'rgba(74,213,107,.08)', color: 'var(--green)', border: '1px solid rgba(74,213,107,.2)' },
@@ -17,20 +19,26 @@ function timeAgo(ts) {
   return `${Math.floor(diff/3600)}h ago`;
 }
 
-export default function LiveFeed({ signals, onUnlock, onOpen, wallet, id }) {
+export default function LiveFeed({ signals, onUnlock, onOpen, wallet, id, preview }) {
   return (
     <section id={id || 'feed'} style={{ padding: '120px 60px', background: 'var(--bg)', borderTop: '1px solid var(--border)' }}>
       <div style={{ maxWidth: 1200, margin: '0 auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 48, flexWrap: 'wrap', gap: 16 }}>
           <div>
             <h2 style={{ fontFamily: '"Playfair Display", serif', fontSize: 'clamp(28px,4vw,50px)', fontWeight: 400 }}>
-              Live <em style={{ fontStyle: 'italic', color: 'var(--gold)' }}>Signal Feed</em>
+              {preview ? <>Latest <em style={{ fontStyle: 'italic', color: 'var(--gold)' }}>Signals</em></> : <>Live <em style={{ fontStyle: 'italic', color: 'var(--gold)' }}>Signal Feed</em></>}
             </h2>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--green)', fontFamily: '"JetBrains Mono", monospace' }}>
-            <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--green)', display: 'inline-block' }} className="animate-pulse-dot" />
-            Agent Active
-          </div>
+          {preview ? (
+            <Link to="/feed" style={{ fontSize: 13, fontWeight: 600, color: 'var(--gold)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
+              View Live Feed →
+            </Link>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--green)', fontFamily: '"JetBrains Mono", monospace' }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--green)', display: 'inline-block' }} className="animate-pulse-dot" />
+              Agent Active
+            </div>
+          )}
         </div>
 
         {signals.length === 0 ? (
@@ -94,6 +102,19 @@ export default function LiveFeed({ signals, onUnlock, onOpen, wallet, id }) {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {preview && signals.length > 0 && (
+          <div style={{ textAlign: 'center', marginTop: 48 }}>
+            <Link to="/feed" style={{
+              display: 'inline-block', background: 'transparent',
+              border: '1px solid var(--border)', color: 'var(--white)',
+              padding: '14px 40px', borderRadius: 100,
+              fontSize: 13, fontWeight: 600, textDecoration: 'none', letterSpacing: '0.3px',
+            }}>
+              View Live Feed →
+            </Link>
           </div>
         )}
       </div>

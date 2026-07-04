@@ -1,16 +1,9 @@
 import { useState, useEffect } from 'react';
-import Nav from './components/Nav';
-import Hero from './components/Hero';
-import HowItWorks from './components/HowItWorks';
-import GettingStarted from './components/GettingStarted';
-import LiveFeed from './components/LiveFeed';
-import AgentSection from './components/AgentSection';
-import Roadmap from './components/Roadmap';
-import Stats from './components/Stats';
-import FAQ from './components/FAQ';
-import Footer from './components/Footer';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import WalletModal from './components/WalletModal';
 import SignalDetail from './components/SignalDetail';
+import LandingPage from './pages/LandingPage';
+import FeedPage from './pages/FeedPage';
 
 export default function App() {
   const [walletOpen, setWalletOpen] = useState(false);
@@ -70,7 +63,6 @@ export default function App() {
       setWalletOpen(true);
       return;
     }
-    // Simulate payment for demo (in production, use x402)
     const mockTxHash = '0x' + Math.random().toString(16).slice(2).padEnd(64, '0');
     try {
       const r = await fetch('/api/unlock', {
@@ -97,20 +89,23 @@ export default function App() {
     }
   }
 
+  const pageProps = {
+    wallet,
+    signals,
+    stats,
+    onWalletOpen: () => setWalletOpen(true),
+    onUnlock: handleUnlock,
+    onOpen: openDetail,
+  };
+
   return (
-    <div style={{ background: 'var(--bg)', minHeight: '100vh' }}>
-      <Nav onConnect={() => setWalletOpen(true)} wallet={wallet} />
-      <Hero onBrowse={() => document.getElementById('feed')?.scrollIntoView({ behavior: 'smooth' })} stats={stats} />
-      <HowItWorks />
-      <GettingStarted onConnect={() => setWalletOpen(true)} />
-      <LiveFeed signals={signals} onUnlock={handleUnlock} onOpen={openDetail} wallet={wallet} id="feed" />
-      <AgentSection logs={stats.agent_logs} />
-      <Roadmap />
-      <Stats stats={stats} />
-      <FAQ />
-      <Footer />
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<LandingPage {...pageProps} />} />
+        <Route path="/feed" element={<FeedPage {...pageProps} />} />
+      </Routes>
       {walletOpen && <WalletModal onClose={() => setWalletOpen(false)} onConnect={connectWallet} />}
       {selectedSignal && <SignalDetail signal={selectedSignal} onClose={() => setSelectedSignal(null)} />}
-    </div>
+    </BrowserRouter>
   );
 }
