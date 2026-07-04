@@ -18,8 +18,8 @@ export default function App() {
     fetchSignals();
     fetchStats();
 
-    const wsHost = window.location.hostname || 'localhost';
-    const ws = new WebSocket(`ws://${wsHost}:3011`);
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${wsProto}//${window.location.host}/ws`);
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
       if (msg.type === 'new_signal') {
