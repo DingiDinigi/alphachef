@@ -258,17 +258,39 @@ async function checkExchangeFlows() {
 
 const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
 
+function buildFallbackTitle(signals, token) {
+  const primary = signals[0];
+  const detail = primary?.detail || '';
+  const amountMatch = detail.match(/\$[\d,.]+[KMBk]?/);
+  const percentMatch = detail.match(/[-\d.]+%/);
+  const countMatch = detail.match(/\d+\s+(?:commits?|wallets?|transactions?)/i);
+  const metric = amountMatch?.[0] || percentMatch?.[0] || countMatch?.[0] || '';
+  const sourceLabels = {
+    smart_money: 'Whale Accumulation',
+    token_accumulation: 'Unusual Accumulation',
+    liquidity_event: 'New Liquidity Pool',
+    bridge_activity: 'Capital Inflow',
+    funding_rate: 'Funding Rate Anomaly',
+    social_momentum: 'Social Spike',
+    github_activity: 'Dev Activity Surge',
+    exchange_flows: 'Exchange Flow Alert',
+  };
+  const action = sourceLabels[primary?.source] || 'Alpha Signal';
+  return metric
+    ? `$${token} ${action} — ${metric} (${signals.length} Sources)`
+    : `$${token} ${action} Detected — ${signals.length} Corroborating Sources`;
+}
+
 async function writeAnalysis(signals) {
   const sourceSummary = signals.map(s => `- ${s.source}: ${s.detail}`).join('\n');
   const token = signals[0]?.token || 'UNKNOWN';
   const totalStrength = signals.reduce((sum, s) => sum + s.strength, 0);
 
   if (!groq) {
-    // Fallback analysis when no Groq key
     const confidence = totalStrength >= 6 ? 'HIGH' : totalStrength >= 4 ? 'MEDIUM' : 'LOW';
     return {
-      title: `${confidence} Signal: ${token} — Multiple On-Chain Catalysts Detected`,
-      teaser: `${signals.length} corroborating sources detected unusual ${token} activity. ${signals[0]?.detail?.slice(0, 80)}...`,
+      title: buildFallbackTitle(signals, token),
+      teaser: `${signals[0]?.detail?.slice(0, 120)}...`,
       full_analysis: `## Analysis\n\nOur autonomous agent has detected corroborating signals across ${signals.length} independent sources:\n\n${sourceSummary}\n\n## What This Means\n\nWhen multiple independent sources confirm the same directional bias, it significantly reduces noise and increases signal quality. The convergence of ${signals.map(s => s.source).join(', ')} creates a high-conviction setup.\n\n## Risk Factors\n\n- On-chain data has inherent delays\n- Social signals can be manufactured\n- Always size positions appropriately`,
       agent_reasoning: signals.map(s => s.detail).join('\n'),
       confidence,
@@ -286,7 +308,9 @@ NUMBER OF CORROBORATING SOURCES: ${signals.length}
 TOTAL SIGNAL STRENGTH: ${totalStrength}/9
 
 Write:
-1. A punchy title (under 80 chars)
+1. A punchy, data-driven title (under 80 chars). REQUIREMENTS: must include the $TOKEN symbol with $ prefix, at least one specific number or metric from the signals above, and a concrete action verb describing what is happening.
+   GOOD examples: "3 Whale Wallets Accumulating $EIGEN — $4.2M in 48hrs", "$ETH Shorts Squeezed — Funding Rate Hits -8.4%", "$850K Liquidity Pool Opens for $ARC on Arc DEX", "18 Commits in 6hrs Signal $TIA Protocol Upgrade"
+   BAD examples: "HIGH: USDC — 2 Sources Converging", "Strong Alpha Signal on ETH", "Medium Confidence: Multiple Sources", "Token Signal Detected"
 2. A teaser (1 sentence, the hook, ends with "...")
 3. Full analysis (3-4 paragraphs, plain English, specific numbers, actionable)
 4. Confidence: ${totalStrength >= 6 ? 'HIGH' : totalStrength >= 4 ? 'MEDIUM' : 'LOW'}
@@ -312,7 +336,7 @@ Format as JSON: { "title": "...", "teaser": "...", "full_analysis": "...", "conf
     await log('WARN', `Groq API failed: ${e.message}`);
     const confidence = totalStrength >= 6 ? 'HIGH' : totalStrength >= 4 ? 'MEDIUM' : 'LOW';
     return {
-      title: `${confidence}: ${token} — ${signals.length} Sources Converging`,
+      title: buildFallbackTitle(signals, token),
       teaser: signals[0]?.detail?.slice(0, 120) + '...',
       full_analysis: `Multiple on-chain and social sources have converged on $${token}:\n\n${sourceSummary}`,
       agent_reasoning: signals.map(s => s.detail).join('\n'),
