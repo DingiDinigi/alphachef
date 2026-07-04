@@ -1,20 +1,33 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { useAccount } from 'wagmi';
 import WalletModal from './components/WalletModal';
 import SignalDetail from './components/SignalDetail';
 import LandingPage from './pages/LandingPage';
 import FeedPage from './pages/FeedPage';
 
 export default function App() {
+  const { address: wagmiAddress } = useAccount();
   const [walletOpen, setWalletOpen] = useState(false);
   const [wallet, setWallet] = useState(null);
   const [selectedSignal, setSelectedSignal] = useState(null);
   const [signals, setSignals] = useState([]);
   const [stats, setStats] = useState({ total_signals: 0, total_unlocks: 0, total_revenue_usdc: 0, high_confidence_signals: 0, agent_logs: [] });
 
+  // Sync wagmi wallet connection to app state
   useEffect(() => {
-    const saved = localStorage.getItem('ac_wallet');
-    if (saved) setWallet(saved);
+    if (wagmiAddress) {
+      setWallet(wagmiAddress);
+      localStorage.setItem('ac_wallet', wagmiAddress);
+      setWalletOpen(false);
+    }
+  }, [wagmiAddress]);
+
+  useEffect(() => {
+    if (!wagmiAddress) {
+      const saved = localStorage.getItem('ac_wallet');
+      if (saved) setWallet(saved);
+    }
     fetchSignals();
     fetchStats();
 
@@ -104,7 +117,7 @@ export default function App() {
         <Route path="/" element={<LandingPage {...pageProps} />} />
         <Route path="/feed" element={<FeedPage {...pageProps} />} />
       </Routes>
-      {walletOpen && <WalletModal onClose={() => setWalletOpen(false)} onConnect={connectWallet} />}
+      {walletOpen && <WalletModal onClose={() => setWalletOpen(false)} />}
       {selectedSignal && <SignalDetail signal={selectedSignal} onClose={() => setSelectedSignal(null)} />}
     </BrowserRouter>
   );

@@ -5,7 +5,7 @@ const faqs = [
   { q: 'How does payment work?', a: 'Payments use Circle x402 nanopayments on Arc testnet. Click "Unlock Signal", approve the USDC transfer, and the full analysis opens in under 2 seconds.' },
   { q: 'Do I need to create a new wallet every time?', a: 'No. Sign in with the same email on return visits and your existing Circle wallet reconnects automatically — same address, same USDC balance. If you already have a MetaMask or other EVM wallet, you can connect it directly.' },
   { q: 'How accurate are the signals?', a: "AlphaChef requires minimum 2 corroborating sources before publishing any signal. HIGH confidence signals require 3+ converging sources. We don't publish noise — only when multiple independent sources agree." },
-  { q: 'How do I get testnet USDC?', a: 'Use the Arc testnet faucet to get free USDC. Signal prices are $0.01–$0.05 so a small faucet amount lets you unlock many signals.' },
+  { q: 'How do I get testnet USDC?', a: 'Use the Circle faucet at faucet.circle.com to get free USDC. Signal prices are $0.01–$0.05 so a small faucet amount lets you unlock many signals.' },
 ];
 
 export default function FAQ() {
