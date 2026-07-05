@@ -7,6 +7,7 @@ const Database = require('better-sqlite3');
 const { v4: uuidv4 } = require('uuid');
 const { ethers } = require('ethers');
 const path = require('path');
+const { CircleUserControlledWalletsClient } = require('@circle-fin/user-controlled-wallets');
 
 const app = express();
 const server = http.createServer(app);
@@ -49,7 +50,20 @@ db.exec(`
     message TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
+
+  CREATE TABLE IF NOT EXISTS wallet_users (
+    id TEXT PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    circle_user_id TEXT UNIQUE NOT NULL,
+    wallet_address TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  );
 `);
+
+// Circle UCW client
+const circleClient = process.env.CIRCLE_API_KEY
+  ? new CircleUserControlledWalletsClient({ apiKey: process.env.CIRCLE_API_KEY })
+  : null;
 
 const AGENT_SECRET = process.env.AGENT_SECRET || 'alphachef-agent-secret-2024';
 
@@ -185,6 +199,93 @@ app.post('/api/logs', (req, res) => {
   broadcast({ type: 'agent_log', level: level || 'INFO', message, timestamp: Date.now() });
   res.json({ success: true });
 });
+
+// --- Circle UCW wallet endpoints ---
+
+app.get('/api/wallet/config', async (req, res) => {
+  if (!circleClient) return res.status(503).json({ error: 'Circle not configured' });
+  try {
+    const resp = await fetch('https://api.circle.com/v1/w3s/config/entity/appId', {
+      headers: { Authorization: `Bearer ${process.env.CIRCLE_API_KEY}` },
+    });
+    const json = await resp.json();
+    res.json({ appId: json.data?.appId || '' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/wallet/init', async (req, res) => {
+  if (!circleClient) return res.status(503).json({ error: 'Circle not configured' });
+  const { email } = req.body;
+  if (!email || !email.includes('@')) return res.status(400).json({ error: 'Valid email required' });
+
+  try {
+    let user = db.prepare('SELECT * FROM wallet_users WHERE email = ?').get(email);
+    let isNewUser = false;
+
+    if (!user) {
+      // Create new Circle user
+      const circleUserId = uuidv4();
+      await circleClient.createUser({ userId: circleUserId });
+      db.prepare(
+        'INSERT INTO wallet_users (id, email, circle_user_id) VALUES (?, ?, ?)'
+      ).run(uuidv4(), email, circleUserId);
+      user = db.prepare('SELECT * FROM wallet_users WHERE email = ?').get(email);
+      isNewUser = true;
+    }
+
+    // Returning user with existing wallet — no challenge needed
+    if (!isNewUser && user.wallet_address) {
+      return res.json({ isNewUser: false, walletAddress: user.wallet_address });
+    }
+
+    // Get user token for challenge
+    const tokenResp = await circleClient.createUserToken({ userId: user.circle_user_id });
+    const { userToken, encryptionKey } = tokenResp.data;
+
+    // Create PIN + wallet challenge (works for new users and returning users without a wallet)
+    const challengeResp = await circleClient.createUserPinWithWallets({
+      userToken,
+      blockchains: ['ETH-SEPOLIA'],
+    });
+    const { challengeId } = challengeResp.data;
+
+    res.json({ userToken, encryptionKey, challengeId, isNewUser, walletAddress: null });
+  } catch (e) {
+    console.error('Circle /wallet/init error:', e);
+    res.status(500).json({ error: e.message || 'Circle initialization failed' });
+  }
+});
+
+app.post('/api/wallet/confirm', async (req, res) => {
+  if (!circleClient) return res.status(503).json({ error: 'Circle not configured' });
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email required' });
+
+  const user = db.prepare('SELECT * FROM wallet_users WHERE email = ?').get(email);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  try {
+    // Fresh token to list wallets
+    const tokenResp = await circleClient.createUserToken({ userId: user.circle_user_id });
+    const { userToken } = tokenResp.data;
+
+    const walletsResp = await circleClient.listWallets({ userToken });
+    const wallets = walletsResp.data?.wallets || [];
+    if (!wallets.length) return res.status(404).json({ error: 'No wallet found yet' });
+
+    const walletAddress = wallets[0].address;
+    db.prepare('UPDATE wallet_users SET wallet_address = ? WHERE email = ?').run(walletAddress, email);
+
+    res.json({ walletAddress });
+  } catch (e) {
+    console.error('Circle /wallet/confirm error:', e);
+    res.status(500).json({ error: e.message || 'Failed to retrieve wallet' });
+  }
+});
+
+// --- end Circle UCW endpoints ---
 
 wss.on('connection', (ws) => {
   const stats = db.prepare('SELECT COUNT(*) as c FROM signals').get();
