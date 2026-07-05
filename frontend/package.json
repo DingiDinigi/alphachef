@@ -8,6 +8,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@circle-fin/w3s-pw-web-sdk": "^1.1.11",
     "@rainbow-me/rainbowkit": "^2.2.11",
     "@tanstack/react-query": "^5.101.2",
     "framer-motion": "^11.0.8",

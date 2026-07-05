@@ -117,7 +117,16 @@ export default function App() {
         <Route path="/" element={<LandingPage {...pageProps} />} />
         <Route path="/feed" element={<FeedPage {...pageProps} />} />
       </Routes>
-      {walletOpen && <WalletModal onClose={() => setWalletOpen(false)} />}
+      {walletOpen && (
+        <WalletModal
+          onClose={() => setWalletOpen(false)}
+          onConnect={(addr) => {
+            setWallet(addr);
+            localStorage.setItem('ac_wallet', addr);
+            setWalletOpen(false);
+          }}
+        />
+      )}
       {selectedSignal && <SignalDetail signal={selectedSignal} onClose={() => setSelectedSignal(null)} />}
     </BrowserRouter>
   );
