@@ -12,28 +12,59 @@ app.use(express.json());
 
 const db = new Database(path.join(__dirname, 'alphachef.db'));
 
-// Ensure wallet_users table exists with all columns
-db.exec(`
-  CREATE TABLE IF NOT EXISTS wallet_users (
-    id TEXT PRIMARY KEY,
-    email TEXT UNIQUE NOT NULL,
-    circle_user_id TEXT,
-    wallet_address TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch())
-  );
-`);
+// Recreate wallet_users without NOT NULL on circle_user_id if the old schema has it
+{
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='wallet_users'").get();
+  if (row && /circle_user_id\s+TEXT\s+UNIQUE\s+NOT\s+NULL/i.test(row.sql)) {
+    console.log('[wallet-server] Migrating wallet_users: removing NOT NULL from circle_user_id');
+    db.exec(`
+      CREATE TABLE wallet_users_new (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        circle_user_id TEXT UNIQUE,
+        wallet_address TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        circle_wallet_id TEXT,
+        circle_blockchain TEXT
+      );
+      INSERT OR IGNORE INTO wallet_users_new
+        SELECT id, email, circle_user_id, wallet_address, created_at, circle_wallet_id, circle_blockchain
+        FROM wallet_users;
+      DROP TABLE wallet_users;
+      ALTER TABLE wallet_users_new RENAME TO wallet_users;
+    `);
+    console.log('[wallet-server] Migration complete');
+  } else if (!row) {
+    db.exec(`
+      CREATE TABLE wallet_users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        circle_user_id TEXT UNIQUE,
+        wallet_address TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        circle_wallet_id TEXT,
+        circle_blockchain TEXT
+      );
+    `);
+  }
+}
 
-// Idempotent migrations
+// Idempotent column additions for older schemas
 for (const col of ['circle_wallet_id TEXT', 'circle_blockchain TEXT']) {
   try { db.exec(`ALTER TABLE wallet_users ADD COLUMN ${col}`); } catch (_) {}
 }
 
-const circleClient = process.env.CIRCLE_API_KEY
-  ? new CircleUserControlledWalletsClient({ apiKey: process.env.CIRCLE_API_KEY })
+const apiKey = process.env.CIRCLE_API_KEY || '';
+console.log(`[wallet-server] CIRCLE_API_KEY loaded: ${apiKey ? apiKey.slice(0, 8) + '…' : '(empty — check .env)'}`);
+
+const circleClient = apiKey
+  ? new CircleUserControlledWalletsClient({ apiKey })
   : null;
 
 function circleErr(e) {
-  return e?.response?.data?.message || e?.message || 'Circle API error';
+  const msg = e?.response?.data?.message || e?.message || 'Circle API error';
+  const detail = JSON.stringify(e?.response?.data || {});
+  return `${msg} | detail: ${detail}`;
 }
 
 // ── GET /api/wallet/config ─────────────────────────────────────────────────
@@ -56,45 +87,49 @@ app.get('/api/wallet/config', async (req, res) => {
 //               (W3S SDK will show: OTP entry → PIN setup → wallet created)
 // RETURNING:     wallet_address already in DB → return it immediately, no challenge
 app.post('/api/wallet/init', async (req, res) => {
-  if (!circleClient) return res.status(503).json({ error: 'Circle not configured' });
+  if (!circleClient) return res.status(503).json({ error: 'Circle not configured — check CIRCLE_API_KEY in .env' });
   const { email } = req.body;
   if (!email || !email.includes('@')) return res.status(400).json({ error: 'Valid email required' });
 
   try {
-    let user = db.prepare('SELECT * FROM wallet_users WHERE email = ?').get(email);
+    const existing = db.prepare('SELECT * FROM wallet_users WHERE email = ?').get(email);
 
-    // ── Returning user: instant restore ──────────────────────────────────
-    if (user?.wallet_address) {
-      return res.json({ isNewUser: false, walletAddress: user.wallet_address });
+    // ── Returning user with wallet: instant restore ───────────────────────
+    if (existing?.wallet_address) {
+      return res.json({ isNewUser: false, walletAddress: existing.wallet_address });
     }
 
-    // ── New user (or existing without wallet): email OTP flow ─────────
-    const isNewUser = !user;
-    if (!user) {
-      db.prepare('INSERT INTO wallet_users (id, email) VALUES (?, ?)').run(uuidv4(), email);
-      user = db.prepare('SELECT * FROM wallet_users WHERE email = ?').get(email);
-    }
-
-    // Circle sends a 6-digit OTP to the user's email
+    // ── Call Circle first — never insert into DB before a successful API call ──
     const deviceId = uuidv4();
+    console.log(`[wallet/init] Calling createDeviceTokenForEmailLogin for ${email}`);
     const deviceResp = await circleClient.createDeviceTokenForEmailLogin({
       deviceId,
       email,
       idempotencyKey: uuidv4(),
     });
-    const { deviceToken, deviceEncryptionKey } = deviceResp.data;
+    console.log('[wallet/init] createDeviceTokenForEmailLogin response:', JSON.stringify(deviceResp.data));
 
-    // Create the combined OTP-verify + PIN-setup + wallet-creation challenge.
-    // The W3S SDK will step the user through all three phases.
+    const { deviceToken, deviceEncryptionKey } = deviceResp.data;
+    if (!deviceToken) throw new Error('Circle returned no deviceToken — check API key and Circle console config');
+
+    console.log(`[wallet/init] Calling createUserPinWithWallets for ${email}`);
     const challengeResp = await circleClient.createUserPinWithWallets({
       userToken: deviceToken,
       blockchains: ['ETH-SEPOLIA'],
     });
-    const { challengeId } = challengeResp.data;
+    console.log('[wallet/init] createUserPinWithWallets response:', JSON.stringify(challengeResp.data));
 
-    res.json({ deviceToken, deviceEncryptionKey, challengeId, isNewUser });
+    const { challengeId } = challengeResp.data;
+    if (!challengeId) throw new Error('Circle returned no challengeId');
+
+    // ── Circle calls succeeded — safe to upsert into DB now ──────────────
+    if (!existing) {
+      db.prepare('INSERT OR IGNORE INTO wallet_users (id, email) VALUES (?, ?)').run(uuidv4(), email);
+    }
+
+    res.json({ deviceToken, deviceEncryptionKey, challengeId, isNewUser: !existing });
   } catch (e) {
-    console.error('/wallet/init error:', circleErr(e));
+    console.error('[wallet/init] error:', e);
     res.status(500).json({ error: circleErr(e) });
   }
 });
@@ -111,21 +146,29 @@ app.post('/api/wallet/confirm', async (req, res) => {
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   try {
+    console.log(`[wallet/confirm] Calling listWallets for ${email}`);
     const walletsResp = await circleClient.listWallets({ userToken: deviceToken });
+    console.log('[wallet/confirm] listWallets response:', JSON.stringify(walletsResp.data));
+
     const wallets = walletsResp.data?.wallets || [];
     if (!wallets.length) return res.status(404).json({ error: 'Wallet not found — please retry' });
 
     const { address: walletAddress, id: circleWalletId, blockchain, userId: circleUserId } = wallets[0];
 
+    // Upsert — works whether or not the row was pre-created in /init
     db.prepare(`
-      UPDATE wallet_users
-      SET wallet_address = ?, circle_wallet_id = ?, circle_blockchain = ?, circle_user_id = ?
-      WHERE email = ?
-    `).run(walletAddress, circleWalletId, blockchain, circleUserId, email);
+      INSERT INTO wallet_users (id, email, circle_user_id, wallet_address, circle_wallet_id, circle_blockchain)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(email) DO UPDATE SET
+        circle_user_id   = excluded.circle_user_id,
+        wallet_address   = excluded.wallet_address,
+        circle_wallet_id = excluded.circle_wallet_id,
+        circle_blockchain = excluded.circle_blockchain
+    `).run(uuidv4(), email, circleUserId, walletAddress, circleWalletId, blockchain);
 
     res.json({ walletAddress });
   } catch (e) {
-    console.error('/wallet/confirm error:', circleErr(e));
+    console.error('[wallet/confirm] error:', e);
     res.status(500).json({ error: circleErr(e) });
   }
 });
