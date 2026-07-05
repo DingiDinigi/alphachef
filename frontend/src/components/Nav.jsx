@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
-export default function Nav({ onWalletOpen, onDisconnect, wallet }) {
+export default function Nav({ onWalletOpen, onDisconnect, wallet, balanceUsdc }) {
   const { pathname } = useLocation();
   const base = pathname === '/feed' ? '/' : '';
   const [open, setOpen] = useState(false);
@@ -26,8 +26,8 @@ export default function Nav({ onWalletOpen, onDisconnect, wallet }) {
 
   function reconnect() {
     setOpen(false);
-    onDisconnect();       // clear state first
-    onWalletOpen();       // then open modal so they can re-auth
+    onDisconnect();
+    onWalletOpen();
   }
 
   function disconnect() {
@@ -38,7 +38,6 @@ export default function Nav({ onWalletOpen, onDisconnect, wallet }) {
   const hashLinks = [
     { label: 'How It Works', hash: 'how-it-works' },
     { label: 'The Agent', hash: 'the-agent' },
-    { label: 'Roadmap', hash: 'roadmap' },
   ];
 
   return (
@@ -55,8 +54,11 @@ export default function Nav({ onWalletOpen, onDisconnect, wallet }) {
         </span>
       </Link>
 
-      <div style={{ display: 'flex', gap: 36, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 32, alignItems: 'center' }}>
         <Link to="/feed" style={{ fontSize: 13, fontWeight: 500, color: 'var(--dim)', textDecoration: 'none' }}>Feed</Link>
+        {wallet && (
+          <Link to="/profile" style={{ fontSize: 13, fontWeight: 500, color: 'var(--dim)', textDecoration: 'none' }}>Profile</Link>
+        )}
         {hashLinks.map(({ label, hash }) => (
           <a key={hash} href={`${base}#${hash}`}
             style={{ fontSize: 13, fontWeight: 500, color: 'var(--dim)', textDecoration: 'none' }}>
@@ -66,34 +68,40 @@ export default function Nav({ onWalletOpen, onDisconnect, wallet }) {
       </div>
 
       {wallet ? (
-        <div ref={dropRef} style={{ position: 'relative' }}>
-          <button onClick={() => setOpen(o => !o)} style={{
-            background: 'var(--gold)', color: '#0a0a08', padding: '10px 22px',
-            borderRadius: 100, fontSize: 13, fontWeight: 700, border: 'none', cursor: 'pointer',
-            display: 'flex', alignItems: 'center', gap: 8,
-          }}>
-            <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--green)', display: 'inline-block' }} />
-            {copied ? 'Copied!' : `${wallet.slice(0, 6)}...${wallet.slice(-4)}`}
-          </button>
-
-          {open && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {balanceUsdc !== undefined && balanceUsdc !== '' && (
             <div style={{
-              position: 'absolute', right: 0, top: 'calc(100% + 8px)',
-              background: 'var(--bg2)', border: '1px solid var(--card-border)',
-              borderRadius: 12, padding: '6px', minWidth: 180, zIndex: 200,
-              boxShadow: '0 8px 32px rgba(0,0,0,.5)',
+              fontSize: 12, fontWeight: 700, color: 'var(--gold)',
+              background: 'rgba(201,162,39,.08)', border: '1px solid rgba(201,162,39,.2)',
+              padding: '5px 12px', borderRadius: 100,
             }}>
-              <button onClick={copyAddress} style={menuItem}>
-                📋 Copy address
-              </button>
-              <button onClick={reconnect} style={menuItem}>
-                🔄 Reconnect wallet
-              </button>
-              <button onClick={disconnect} style={{ ...menuItem, color: '#ff6b6b' }}>
-                🚪 Disconnect
-              </button>
+              {parseFloat(balanceUsdc).toFixed(2)} USDC
             </div>
           )}
+          <div ref={dropRef} style={{ position: 'relative' }}>
+            <button onClick={() => setOpen(o => !o)} style={{
+              background: 'var(--gold)', color: '#0a0a08', padding: '10px 22px',
+              borderRadius: 100, fontSize: 13, fontWeight: 700, border: 'none', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--green)', display: 'inline-block' }} />
+              {copied ? 'Copied!' : `${wallet.slice(0, 6)}...${wallet.slice(-4)}`}
+            </button>
+
+            {open && (
+              <div style={{
+                position: 'absolute', right: 0, top: 'calc(100% + 8px)',
+                background: 'var(--bg2)', border: '1px solid var(--card-border)',
+                borderRadius: 12, padding: '6px', minWidth: 180, zIndex: 200,
+                boxShadow: '0 8px 32px rgba(0,0,0,.5)',
+              }}>
+                <button onClick={copyAddress} style={menuItem}>📋 Copy address</button>
+                <Link to="/profile" onClick={() => setOpen(false)} style={{ ...menuItem, display: 'block', textDecoration: 'none' }}>👤 Profile</Link>
+                <button onClick={reconnect} style={menuItem}>🔄 Reconnect wallet</button>
+                <button onClick={disconnect} style={{ ...menuItem, color: '#ff6b6b' }}>🚪 Disconnect</button>
+              </div>
+            )}
+          </div>
         </div>
       ) : (
         <button onClick={onWalletOpen} style={{

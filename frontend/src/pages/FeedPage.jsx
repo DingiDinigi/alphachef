@@ -10,7 +10,7 @@ export default function FeedPage({ wallet, signals, stats, onWalletOpen, onDisco
 
   return (
     <div style={{ background: 'var(--bg)', minHeight: '100vh' }}>
-      <Nav onWalletOpen={onWalletOpen} onDisconnect={onDisconnect} wallet={wallet} />
+      <Nav onWalletOpen={onWalletOpen} onDisconnect={onDisconnect} wallet={wallet} balanceUsdc={balanceUsdc} />
       <LiveFeed
         signals={signals.slice(0, visible)}
         onUnlock={onUnlock}

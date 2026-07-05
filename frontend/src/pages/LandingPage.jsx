@@ -12,7 +12,7 @@ import Footer from '../components/Footer';
 export default function LandingPage({ wallet, signals, stats, onWalletOpen, onDisconnect, onUnlock, onOpen }) {
   return (
     <div style={{ background: 'var(--bg)', minHeight: '100vh' }}>
-      <Nav onWalletOpen={onWalletOpen} onDisconnect={onDisconnect} wallet={wallet} />
+      <Nav onWalletOpen={onWalletOpen} onDisconnect={onDisconnect} wallet={wallet} balanceUsdc={balanceUsdc} />
       <Hero
         onBrowse={() => document.getElementById('signal-preview')?.scrollIntoView({ behavior: 'smooth' })}
         stats={stats}

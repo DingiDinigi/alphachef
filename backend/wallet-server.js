@@ -197,32 +197,101 @@ app.post('/api/wallet/finalize', async (req, res) => {
   }
 });
 
-// ── POST /api/wallet/unlock-challenge ─────────────────────────────────────
-// Creates a signMessage challenge so the user enters their PIN to authorise
-// a signal unlock. Returns challengeId + fresh userToken for the W3S SDK.
-app.post('/api/wallet/unlock-challenge', async (req, res) => {
+// ── POST /api/wallet/create-payment ───────────────────────────────────────
+// Creates a real USDC transfer challenge. Checks balance first — returns error
+// if insufficient. User must execute the challengeId via SDK (PIN entry) to
+// authorise the on-chain transfer.
+app.post('/api/wallet/create-payment', async (req, res) => {
   if (!circleClient) return res.status(503).json({ error: 'Circle not configured' });
   const { email, signal_id, userToken } = req.body;
   if (!email || !signal_id) return res.status(400).json({ error: 'email and signal_id required' });
-  // Email OTP users authenticate client-side; userToken cannot be created server-side for them
   if (!userToken) return res.status(400).json({ error: 'Session expired — please reconnect your wallet' });
 
   const user = db.prepare('SELECT * FROM wallet_users WHERE email = ?').get(email);
-  if (!user?.wallet_address) return res.status(404).json({ error: 'No Circle wallet found for this email' });
+  if (!user?.circle_wallet_id) return res.status(404).json({ error: 'No Circle wallet found for this email' });
 
-  console.log(`[unlock-challenge] email=${email} walletId=${user.circle_wallet_id}`);
+  const platformWallet = process.env.PLATFORM_WALLET;
+  if (!platformWallet) return res.status(503).json({ error: 'Platform wallet not configured' });
+
+  console.log(`[create-payment] email=${email} walletId=${user.circle_wallet_id} signal=${signal_id}`);
   try {
-    const signResp = await circleClient.signMessage({
-      userToken,
-      walletId: user.circle_wallet_id,
-      message: `AlphaChef signal unlock: ${signal_id}`,
+    // Check USDC balance — requires only API key, not userToken
+    const balResp = await fetch(`https://api.circle.com/v1/w3s/wallets/${user.circle_wallet_id}/balances`, {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
     });
-    const { challengeId } = signResp.data;
-    console.log('[unlock-challenge] signMessage OK challengeId:', challengeId);
-    res.json({ challengeId });
+    const balData = await balResp.json();
+    const tokenBalances = balData.data?.tokenBalances || [];
+    const usdc = tokenBalances.find(b =>
+      b.token?.symbol === 'USDC' || b.token?.name?.toLowerCase().includes('usd coin')
+    );
+
+    const price = 0.05;
+    const balance = parseFloat(usdc?.amount || '0');
+    console.log(`[create-payment] USDC balance=${balance} required=${price}`);
+
+    if (!usdc || balance < price) {
+      return res.status(400).json({
+        error: 'Insufficient USDC balance — get testnet USDC from the Circle faucet',
+        balance: usdc?.amount || '0',
+        required: String(price),
+      });
+    }
+
+    const tokenId = usdc.token.id;
+
+    // Create transfer challenge — user PIN-confirms it via SDK
+    const transferResp = await fetch('https://api.circle.com/v1/w3s/user/transactions/transfer', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        idempotencyKey: uuidv4(),
+        walletId: user.circle_wallet_id,
+        tokenId,
+        destinationAddress: platformWallet,
+        amounts: [String(price)],
+        feeLevel: 'LOW',
+        userToken,
+      }),
+    });
+
+    const transferData = await transferResp.json();
+    console.log('[create-payment] Circle transfer response:', JSON.stringify(transferData));
+
+    if (!transferResp.ok) {
+      return res.status(400).json({ error: transferData.message || JSON.stringify(transferData) });
+    }
+
+    const challengeId = transferData.data?.challengeId;
+    if (!challengeId) throw new Error('Circle did not return a challengeId for the transfer');
+
+    res.json({ challengeId, balance: usdc.amount });
   } catch (e) {
-    console.error('[unlock-challenge] FAILED:', JSON.stringify({ code: e?.code, status: e?.response?.status, message: e?.message, data: e?.response?.data }));
+    console.error('[create-payment] error:', e);
     res.status(500).json({ error: circleErr(e) });
+  }
+});
+
+// ── GET /api/wallet/balance ────────────────────────────────────────────────
+// Returns USDC balance for a Circle wallet. No userToken needed — uses API key.
+app.get('/api/wallet/balance', async (req, res) => {
+  const { email } = req.query;
+  if (!email) return res.json({ balance: '0' });
+  const user = db.prepare('SELECT circle_wallet_id FROM wallet_users WHERE email = ?').get(email);
+  if (!user?.circle_wallet_id) return res.json({ balance: '0' });
+  try {
+    const resp = await fetch(`https://api.circle.com/v1/w3s/wallets/${user.circle_wallet_id}/balances`, {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    });
+    const data = await resp.json();
+    const usdc = (data.data?.tokenBalances || []).find(b =>
+      b.token?.symbol === 'USDC' || b.token?.name?.toLowerCase().includes('usd coin')
+    );
+    res.json({ balance: usdc?.amount || '0' });
+  } catch (_) {
+    res.json({ balance: '0' });
   }
 });
 

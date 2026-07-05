@@ -6,6 +6,7 @@ import CircleUnlockModal from './components/CircleUnlockModal';
 import SignalDetail from './components/SignalDetail';
 import LandingPage from './pages/LandingPage';
 import FeedPage from './pages/FeedPage';
+import ProfilePage from './pages/ProfilePage';
 
 const SESSION_TTL = 24 * 60 * 60 * 1000;
 
@@ -23,6 +24,7 @@ export default function App() {
   const [appId, setAppId] = useState('');
   const [signals, setSignals] = useState([]);
   const [stats, setStats] = useState({ total_signals: 0, total_unlocks: 0, total_revenue_usdc: 0, high_confidence_signals: 0, agent_logs: [] });
+  const [balanceUsdc, setBalanceUsdc] = useState('');
 
   // Sync MetaMask / wagmi wallet
   useEffect(() => {
@@ -70,6 +72,21 @@ export default function App() {
     return () => { ws.close(); clearInterval(interval); };
   }, []);
 
+  useEffect(() => {
+    async function fetchBalance() {
+      const email = localStorage.getItem('ac_wallet_email');
+      if (!email || localStorage.getItem('ac_wallet_type') !== 'circle') { setBalanceUsdc(''); return; }
+      try {
+        const r = await fetch(`/api/wallet/balance?email=${encodeURIComponent(email)}`);
+        const d = await r.json();
+        setBalanceUsdc(d.balance || '0');
+      } catch (_) {}
+    }
+    fetchBalance();
+    const t = setInterval(fetchBalance, 30000);
+    return () => clearInterval(t);
+  }, [wallet]);
+
   async function fetchSignals() {
     try {
       const walletAddr = localStorage.getItem('ac_wallet');
@@ -100,6 +117,7 @@ export default function App() {
 
   function disconnectWallet() {
     setWallet(null);
+    setBalanceUsdc('');
     localStorage.removeItem('ac_wallet');
     localStorage.removeItem('ac_wallet_type');
     localStorage.removeItem('ac_wallet_email');
@@ -158,8 +176,9 @@ export default function App() {
     else handleUnlock(signal);
   }
 
-  function handleUnlockSuccess() {
+  function handleUnlockSuccess(signal) {
     setUnlockSignal(null);
+    if (signal) setSelectedSignal(signal);
     fetchSignals();
     fetchStats();
   }
@@ -168,6 +187,7 @@ export default function App() {
     wallet,
     signals,
     stats,
+    balanceUsdc,
     onWalletOpen: () => setWalletOpen(true),
     onDisconnect: disconnectWallet,
     onUnlock: handleUnlock,
@@ -179,6 +199,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<LandingPage {...pageProps} />} />
         <Route path="/feed" element={<FeedPage {...pageProps} />} />
+        <Route path="/profile" element={<ProfilePage wallet={wallet} balanceUsdc={balanceUsdc} onWalletOpen={() => setWalletOpen(true)} onDisconnect={disconnectWallet} />} />
       </Routes>
 
       {walletOpen && (

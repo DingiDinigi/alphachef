@@ -139,7 +139,7 @@ app.get('/api/signals/:id', (req, res) => {
 });
 
 app.post('/api/unlock', async (req, res) => {
-  const { signal_id, wallet_address, tx_hash } = req.body;
+  const { signal_id, wallet_address, tx_hash, message } = req.body;
 
   if (!signal_id || !wallet_address || !tx_hash) {
     return res.status(400).json({ error: 'Missing required fields' });
@@ -149,17 +149,20 @@ app.post('/api/unlock', async (req, res) => {
   if (!signal) return res.status(404).json({ error: 'Signal not found' });
 
   if (hasUnlocked(signal_id, wallet_address)) {
-    return res.json({ success: true, message: 'Already unlocked' });
+    return res.json({ success: true, message: 'Already unlocked', signal: signalToTeaser(signal, wallet_address) });
   }
 
-  try {
-    const provider = new ethers.JsonRpcProvider(process.env.ARC_RPC_URL || 'https://rpc.testnet.arc.fun');
-    const receipt = await provider.getTransactionReceipt(tx_hash);
-    if (!receipt || receipt.status !== 1) {
-      return res.status(400).json({ error: 'Transaction not confirmed' });
+  // Verify MetaMask/Rabby signature if a message was signed
+  // Circle unlocks send a `circle_` prefix — those are authorised by PIN via the SDK
+  if (message && !tx_hash.startsWith('circle_')) {
+    try {
+      const recovered = ethers.verifyMessage(message, tx_hash);
+      if (recovered.toLowerCase() !== wallet_address.toLowerCase()) {
+        return res.status(403).json({ error: 'Signature does not match wallet address' });
+      }
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid signature' });
     }
-  } catch (e) {
-    console.warn('Could not verify tx on-chain:', e.message);
   }
 
   const unlockId = uuidv4();
@@ -172,6 +175,18 @@ app.post('/api/unlock', async (req, res) => {
   broadcast({ type: 'signal_unlocked', signal_id, wallet_address });
 
   res.json({ success: true, signal: fullSignal });
+});
+
+app.get('/api/unlocks', (req, res) => {
+  const wallet = req.query.wallet;
+  if (!wallet) return res.json([]);
+  const rows = db.prepare(`
+    SELECT u.id, u.signal_id, u.amount_usdc, u.created_at, s.title, s.confidence
+    FROM unlocks u JOIN signals s ON u.signal_id = s.id
+    WHERE LOWER(u.wallet_address) = LOWER(?)
+    ORDER BY u.created_at DESC
+  `).all(wallet);
+  res.json(rows);
 });
 
 app.get('/api/stats', (req, res) => {
