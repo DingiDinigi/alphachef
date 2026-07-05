@@ -212,12 +212,11 @@ app.post('/api/wallet/unlock-challenge', async (req, res) => {
     const tokenResp = await circleClient.createUserToken({ userId: user.circle_user_id });
     const { userToken, encryptionKey } = tokenResp.data;
 
+    console.log(`[unlock-challenge] user row:`, JSON.stringify({ circle_wallet_id: user.circle_wallet_id, circle_user_id: user.circle_user_id, circle_blockchain: user.circle_blockchain }));
     const signResp = await circleClient.signMessage({
       userToken,
-      walletAddress: user.wallet_address,
-      blockchain: user.circle_blockchain || 'ETH-SEPOLIA',
-      message: `AlphaChef signal unlock authorisation: ${signal_id}`,
-      memo: 'Tap confirm to authorise the USDC payment and unlock this signal.',
+      walletId: user.circle_wallet_id,
+      message: `AlphaChef signal unlock: ${signal_id}`,
     });
     const { challengeId } = signResp.data;
 
