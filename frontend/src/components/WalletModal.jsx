@@ -98,17 +98,21 @@ export default function WalletModal({ onClose, onConnect }) {
     s.setAuthentication({ userToken: deviceToken, encryptionKey: deviceEncryptionKey });
     setView('pin');
 
-    s.execute(challengeId, async (err) => {
+    // execute(otpToken) handles the full OTP verification + PIN setup in Circle's iframe.
+    // The callback result may carry {userToken, encryptionKey} for the verified session;
+    // fall back to the deviceToken/key if the SDK version omits them.
+    s.execute(challengeId, async (err, result) => {
       if (err) {
         setErrMsg(err.message || 'Setup cancelled');
         setView('sent');
         return;
       }
-      // Fetch the newly created wallet
+      const userToken = result?.userToken || deviceToken;
+      const encryptionKey = result?.encryptionKey || deviceEncryptionKey;
       try {
         const r = await fetch('/api/wallet/confirm', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: email.trim(), deviceToken }),
+          body: JSON.stringify({ email: email.trim(), userToken, encryptionKey }),
         });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error);

@@ -75,9 +75,9 @@ app.get('/api/wallet/config', (req, res) => {
 });
 
 // ── POST /api/wallet/init ──────────────────────────────────────────────────
-// NEW USER:      Circle sends OTP to email → returns deviceToken + challengeId
-//               (W3S SDK will show: OTP entry → PIN setup → wallet created)
-// RETURNING:     wallet_address already in DB → return it immediately, no challenge
+// NEW USER:      Circle sends OTP to email → returns deviceToken + otpToken as challengeId.
+//               The W3S SDK execute(otpToken) handles OTP entry + PIN setup in one iframe flow.
+// RETURNING:     wallet_address already in DB → return it immediately, no OTP needed.
 app.post('/api/wallet/init', async (req, res) => {
   if (!circleClient) return res.status(503).json({ error: 'Circle not configured — check CIRCLE_API_KEY in .env' });
   const { email } = req.body;
@@ -86,12 +86,12 @@ app.post('/api/wallet/init', async (req, res) => {
   try {
     const existing = db.prepare('SELECT * FROM wallet_users WHERE email = ?').get(email);
 
-    // ── Returning user with wallet: instant restore ───────────────────────
+    // ── Returning user with wallet: instant restore, no OTP ──────────────
     if (existing?.wallet_address) {
       return res.json({ isNewUser: false, walletAddress: existing.wallet_address });
     }
 
-    // ── Call Circle first — never insert into DB before a successful API call ──
+    // ── New user: get device token + OTP challenge from Circle ───────────
     const deviceId = uuidv4();
     console.log(`[wallet/init] Calling createDeviceTokenForEmailLogin for ${email}`);
     const deviceResp = await circleClient.createDeviceTokenForEmailLogin({
@@ -101,25 +101,18 @@ app.post('/api/wallet/init', async (req, res) => {
     });
     console.log('[wallet/init] createDeviceTokenForEmailLogin response:', JSON.stringify(deviceResp.data));
 
-    const { deviceToken, deviceEncryptionKey } = deviceResp.data;
+    const { deviceToken, deviceEncryptionKey, otpToken } = deviceResp.data;
     if (!deviceToken) throw new Error('Circle returned no deviceToken — check API key and Circle console config');
+    if (!otpToken) throw new Error('Circle returned no otpToken — OTP email may not have been sent');
 
-    console.log(`[wallet/init] Calling createUserPinWithWallets for ${email}`);
-    const challengeResp = await circleClient.createUserPinWithWallets({
-      userToken: deviceToken,
-      blockchains: ['ETH-SEPOLIA'],
-    });
-    console.log('[wallet/init] createUserPinWithWallets response:', JSON.stringify(challengeResp.data));
-
-    const { challengeId } = challengeResp.data;
-    if (!challengeId) throw new Error('Circle returned no challengeId');
-
-    // ── Circle calls succeeded — safe to upsert into DB now ──────────────
+    // ── Insert placeholder row now that Circle call succeeded ─────────────
     if (!existing) {
       db.prepare('INSERT OR IGNORE INTO wallet_users (id, email) VALUES (?, ?)').run(uuidv4(), email);
     }
 
-    res.json({ deviceToken, deviceEncryptionKey, challengeId, isNewUser: !existing });
+    // The otpToken IS the challengeId — the SDK execute(otpToken) handles the
+    // full OTP verification + PIN setup flow in Circle's hosted iframe.
+    res.json({ deviceToken, deviceEncryptionKey, challengeId: otpToken, isNewUser: true });
   } catch (e) {
     console.error('[wallet/init] error:', e);
     res.status(500).json({ error: circleErr(e) });
@@ -127,34 +120,55 @@ app.post('/api/wallet/init', async (req, res) => {
 });
 
 // ── POST /api/wallet/confirm ───────────────────────────────────────────────
-// Called after the W3S SDK challenge completes. Uses the deviceToken (still
-// valid immediately after challenge) to fetch the newly created wallet.
+// Called after the W3S SDK execute(otpToken) completes (OTP + PIN done).
+// The SDK callback provides {userToken, encryptionKey} for the verified session.
+// We initialize the user's wallet on Circle (POST /v1/w3s/user/initialize),
+// handling error 155106 (already initialized = returning user) by listing wallets.
 app.post('/api/wallet/confirm', async (req, res) => {
   if (!circleClient) return res.status(503).json({ error: 'Circle not configured' });
-  const { email, deviceToken } = req.body;
-  if (!email || !deviceToken) return res.status(400).json({ error: 'email and deviceToken required' });
+  const { email, userToken, encryptionKey } = req.body;
+  if (!email || !userToken) return res.status(400).json({ error: 'email and userToken required' });
 
-  const user = db.prepare('SELECT * FROM wallet_users WHERE email = ?').get(email);
-  if (!user) return res.status(404).json({ error: 'User not found' });
+  // Ensure a placeholder row exists (may have been created in /init, or not)
+  db.prepare('INSERT OR IGNORE INTO wallet_users (id, email) VALUES (?, ?)').run(uuidv4(), email);
 
   try {
+    // ── Try to initialize user + create wallet ────────────────────────────
+    // Error 155106 = user already initialized (returning user who completed OTP+PIN
+    // previously). In that case we skip init and list their existing wallet instead.
+    try {
+      console.log(`[wallet/confirm] Calling createUserPinWithWallets for ${email}`);
+      const initResp = await circleClient.createUserPinWithWallets({
+        userToken,
+        blockchains: ['ETH-SEPOLIA'],
+      });
+      console.log('[wallet/confirm] createUserPinWithWallets response:', JSON.stringify(initResp.data));
+    } catch (initErr) {
+      const code = initErr?.code ?? initErr?.response?.data?.code;
+      if (code !== 155106) {
+        console.error('[wallet/confirm] createUserPinWithWallets error:', initErr);
+        return res.status(500).json({ error: circleErr(initErr) });
+      }
+      console.log('[wallet/confirm] User already initialized (155106) — listing existing wallet');
+    }
+
+    // ── Fetch the wallet (exists whether new or returning) ────────────────
     console.log(`[wallet/confirm] Calling listWallets for ${email}`);
-    const walletsResp = await circleClient.listWallets({ userToken: deviceToken });
+    const walletsResp = await circleClient.listWallets({ userToken });
     console.log('[wallet/confirm] listWallets response:', JSON.stringify(walletsResp.data));
 
     const wallets = walletsResp.data?.wallets || [];
-    if (!wallets.length) return res.status(404).json({ error: 'Wallet not found — please retry' });
+    if (!wallets.length) return res.status(404).json({ error: 'Wallet not yet available — please retry in a moment' });
 
     const { address: walletAddress, id: circleWalletId, blockchain, userId: circleUserId } = wallets[0];
 
-    // Upsert — works whether or not the row was pre-created in /init
     db.prepare(`
       INSERT INTO wallet_users (id, email, circle_user_id, wallet_address, circle_wallet_id, circle_blockchain)
       VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(email) DO UPDATE SET
-        circle_user_id   = excluded.circle_user_id,
-        wallet_address   = excluded.wallet_address,
-        circle_wallet_id = excluded.circle_wallet_id,
+        circle_user_id    = excluded.circle_user_id,
+        wallet_address    = excluded.wallet_address,
+        circle_wallet_id  = excluded.circle_wallet_id,
         circle_blockchain = excluded.circle_blockchain
     `).run(uuidv4(), email, circleUserId, walletAddress, circleWalletId, blockchain);
 
