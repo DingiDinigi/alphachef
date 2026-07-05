@@ -39,13 +39,19 @@ const LABEL = {
 };
 
 const CIRCLE_APP_ID = import.meta.env.VITE_CIRCLE_APP_ID || '';
+console.log('[W3SSdk] VITE_CIRCLE_APP_ID:', CIRCLE_APP_ID || '(empty — check .env)');
 
+// Module-level singleton. _loginCallback is swapped in before each verifyOtp()
+// call so the component can forward the onLoginComplete result to React state.
 let _sdk = null;
-function sdk() {
+let _loginCallback = null;
+
+function getSdk() {
   if (!_sdk) {
-    _sdk = new W3SSdk();
-    if (CIRCLE_APP_ID) _sdk.setAppSettings({ appId: CIRCLE_APP_ID });
-    // getDeviceId() is required by the W3S SDK after initialization
+    _sdk = new W3SSdk(
+      { appSettings: { appId: CIRCLE_APP_ID } },
+      { onLoginComplete: (result) => _loginCallback?.(result) },
+    );
     _sdk.getDeviceId((err, deviceId) => {
       if (err) console.warn('[W3SSdk] getDeviceId error:', err);
       else console.log('[W3SSdk] deviceId:', deviceId);
@@ -83,7 +89,7 @@ export default function WalletModal({ onClose, onConnect }) {
       }
 
       // ── New user — Circle sent OTP, execute W3S challenge ─────────
-      sessionRef.current = { deviceToken: d.deviceToken, deviceEncryptionKey: d.deviceEncryptionKey, challengeId: d.challengeId };
+      sessionRef.current = { deviceToken: d.deviceToken, deviceEncryptionKey: d.deviceEncryptionKey, otpToken: d.challengeId };
       setView('sent'); // "check your email" screen
     } catch (err) {
       setErrMsg(err.message || 'Something went wrong');
@@ -92,42 +98,42 @@ export default function WalletModal({ onClose, onConnect }) {
     }
   }
 
-  function executePinChallenge() {
-    const { deviceToken, deviceEncryptionKey, challengeId } = sessionRef.current;
-    const s = sdk();
-    s.setAuthentication({ userToken: deviceToken, encryptionKey: deviceEncryptionKey });
-    setView('pin');
+  function startOtpVerification() {
+    const { deviceToken, deviceEncryptionKey, otpToken } = sessionRef.current;
+    const s = getSdk();
 
-    // execute(otpToken) handles the full OTP verification + PIN setup in Circle's iframe.
-    // The callback result may carry {userToken, encryptionKey} for the verified session;
-    // fall back to the deviceToken/key if the SDK version omits them.
-    s.execute(challengeId, async (err, result) => {
-      if (err) {
-        setErrMsg(err.message || 'Setup cancelled');
-        setView('sent');
-        return;
-      }
+    // Capture email now (React state); wire result to confirm before verifyOtp fires.
+    const currentEmail = email.trim();
+    _loginCallback = null; // clear any stale callback first
+    _loginCallback = async (result) => {
+      _loginCallback = null;
       const userToken = result?.userToken || deviceToken;
       const encryptionKey = result?.encryptionKey || deviceEncryptionKey;
       try {
         const r = await fetch('/api/wallet/confirm', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: email.trim(), userToken, encryptionKey }),
+          body: JSON.stringify({ email: currentEmail, userToken, encryptionKey }),
         });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error);
         setWalletAddr(d.walletAddress);
         setView('success');
-        onConnect?.(d.walletAddress, email.trim(), 'circle');
+        onConnect?.(d.walletAddress, currentEmail, 'circle');
       } catch (ce) {
-        setErrMsg(ce.message);
+        setErrMsg(ce.message || 'Wallet setup failed');
         setView('err');
       }
+    };
+
+    s.updateConfigs({
+      loginConfigs: { deviceToken, deviceEncryptionKey, otpToken, email: currentEmail },
     });
+    setView('pin');
+    s.verifyOtp();
   }
 
   const stopClose = (e) => e.stopPropagation();
-  const noBgClose = view === 'pin'; // don't close while PIN modal is open
+  const noBgClose = view === 'pin';
 
   return (
     <div onClick={noBgClose ? undefined : onClose} style={OVERLAY}>
@@ -203,7 +209,7 @@ export default function WalletModal({ onClose, onConnect }) {
             Enter the code in the Circle prompt, then set your 6-digit PIN. Your wallet will be created automatically.
           </p>
           {errMsg && <p style={{ fontSize: 12, color: '#ff6b6b', marginBottom: 14, lineHeight: 1.5 }}>{errMsg}</p>}
-          <button onClick={executePinChallenge} style={BTN(true)}>Enter Code &amp; Set PIN →</button>
+          <button onClick={startOtpVerification} style={BTN(true)}>Enter Code &amp; Set PIN →</button>
           <button onClick={() => setView('email')} style={{ ...BTN(false), marginTop: 10, justifyContent: 'center' }}>← Use a different email</button>
         </>)}
 
