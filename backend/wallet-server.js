@@ -75,47 +75,48 @@ app.get('/api/wallet/config', (req, res) => {
 });
 
 // ── POST /api/wallet/init ──────────────────────────────────────────────────
-// NEW USER:      Circle sends OTP to email → returns deviceToken + otpToken as challengeId.
-//               The W3S SDK execute(otpToken) handles OTP entry + PIN setup in one iframe flow.
-// RETURNING:     wallet_address already in DB → return it immediately, no OTP needed.
+// RETURNING USER: email in DB with wallet_address → return immediately, no OTP.
+//                 Pass forceOtp:true to send OTP anyway (session expired case).
+// NEW USER:       Send OTP via createDeviceTokenForEmailLogin — requires deviceId.
 app.post('/api/wallet/init', async (req, res) => {
   if (!circleClient) return res.status(503).json({ error: 'Circle not configured — check CIRCLE_API_KEY in .env' });
-  const { email } = req.body;
+  const { email, deviceId, forceOtp } = req.body;
   if (!email || !email.includes('@')) return res.status(400).json({ error: 'Valid email required' });
 
   try {
     const existing = db.prepare('SELECT * FROM wallet_users WHERE email = ?').get(email);
 
-    // ── Returning user with wallet: instant restore, no OTP ──────────────
-    if (existing?.wallet_address) {
-      return res.json({ isNewUser: false, walletAddress: existing.wallet_address });
+    // Returning user with a complete wallet — no OTP needed
+    if (existing?.wallet_address && !forceOtp) {
+      console.log(`[wallet/init] Returning user ${email} — skipping OTP`);
+      return res.json({ isReturning: true, walletAddress: existing.wallet_address });
     }
 
-    // ── New user: get device token + OTP challenge from Circle ───────────
-    // deviceId must come from the SDK (getDeviceId) — using a random UUID
-    // causes "Provided device ID is not found" when verifyOtp() runs.
-    const deviceId = req.body.deviceId;
-    if (!deviceId) return res.status(400).json({ error: 'deviceId required — call sdk.getDeviceId() first' });
-    console.log(`[wallet/init] Calling createDeviceTokenForEmailLogin for ${email}, deviceId=${deviceId}`);
+    // New user or forced re-auth — deviceId required to send OTP
+    if (!deviceId) return res.status(400).json({ error: 'deviceId required', needsOtp: true });
+
+    console.log(`[wallet/init] Sending OTP to ${email} (forceOtp=${!!forceOtp})`);
     const deviceResp = await circleClient.createDeviceTokenForEmailLogin({
-      deviceId,
-      email,
-      idempotencyKey: uuidv4(),
+      deviceId, email, idempotencyKey: uuidv4(),
     });
-    console.log('[wallet/init] createDeviceTokenForEmailLogin response:', JSON.stringify(deviceResp.data));
+    console.log('[wallet/init] OTP response:', JSON.stringify(deviceResp.data));
 
     const { deviceToken, deviceEncryptionKey, otpToken } = deviceResp.data;
     if (!deviceToken) throw new Error('Circle returned no deviceToken — check API key and Circle console config');
     if (!otpToken) throw new Error('Circle returned no otpToken — OTP email may not have been sent');
 
-    // ── Insert placeholder row now that Circle call succeeded ─────────────
     if (!existing) {
       db.prepare('INSERT OR IGNORE INTO wallet_users (id, email) VALUES (?, ?)').run(uuidv4(), email);
     }
 
-    // The otpToken IS the challengeId — the SDK execute(otpToken) handles the
-    // full OTP verification + PIN setup flow in Circle's hosted iframe.
-    res.json({ deviceToken, deviceEncryptionKey, challengeId: otpToken, isNewUser: true });
+    res.json({
+      deviceToken,
+      deviceEncryptionKey,
+      challengeId: otpToken,
+      isNewUser: !existing,
+      isReturning: !!existing?.wallet_address,
+      walletAddress: existing?.wallet_address || null,
+    });
   } catch (e) {
     console.error('[wallet/init] error:', e);
     res.status(500).json({ error: circleErr(e) });

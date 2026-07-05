@@ -21,8 +21,14 @@ const BTN = (primary) => ({
 let _sdk = null;
 function sdk() { if (!_sdk) _sdk = new W3SSdk(); return _sdk; }
 
-export default function CircleUnlockModal({ email, signalId, appId, onSuccess, onClose }) {
-  const [state, setState] = useState('loading'); // loading | ready | executing | success | error
+const SESSION_TTL = 24 * 60 * 60 * 1000;
+
+function safeParseSession() {
+  try { return JSON.parse(localStorage.getItem('circle_session') || 'null'); } catch { return null; }
+}
+
+export default function CircleUnlockModal({ email, signalId, appId, onSuccess, onClose, onReconnect }) {
+  const [state, setState] = useState('loading'); // loading | ready | executing | success | error | expired
   const [errMsg, setErrMsg] = useState('');
   const challengeRef = useRef({ challengeId: '', userToken: '', encryptionKey: '' });
 
@@ -30,15 +36,25 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
     let cancelled = false;
     (async () => {
       try {
-        // userToken from the OTP login session — can't regenerate server-side for email OTP users
-        const session = JSON.parse(localStorage.getItem('circle_session') || 'null');
-        if (!session?.userToken) throw new Error('Session expired — please reconnect your wallet');
+        const session = safeParseSession();
+        if (!session?.userToken) {
+          if (!cancelled) setState('expired');
+          return;
+        }
+        if (Date.now() - (session.timestamp || 0) > SESSION_TTL) {
+          if (!cancelled) setState('expired');
+          return;
+        }
         const r = await fetch('/api/wallet/unlock-challenge', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, signal_id: signalId, userToken: session.userToken }),
         });
         const d = await r.json();
-        if (!r.ok) throw new Error(d.error);
+        if (!r.ok) {
+          // If Circle rejects the token it's also effectively expired
+          if (!cancelled) { setState('expired'); }
+          return;
+        }
         if (!cancelled) {
           challengeRef.current = { challengeId: d.challengeId, userToken: session.userToken, encryptionKey: session.encryptionKey };
           setState('ready');
@@ -65,9 +81,10 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
       }
       // PIN confirmed — call the unlock endpoint
       try {
+        const walletAddress = localStorage.getItem('ac_wallet') || '';
         const r = await fetch('/api/unlock', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ signal_id: signalId, tx_hash: `circle_${Date.now()}` }),
+          body: JSON.stringify({ signal_id: signalId, wallet_address: walletAddress, tx_hash: `circle_${Date.now()}` }),
         });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error);
@@ -123,6 +140,18 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
             <div style={{ fontSize: 40, marginBottom: 12 }}>✓</div>
             <h3 style={{ fontFamily: '"Playfair Display",serif', fontSize: 22, fontWeight: 400, marginBottom: 8, color: 'var(--gold)' }}>Signal Unlocked!</h3>
             <p style={{ fontSize: 13, color: 'var(--muted)' }}>Payment confirmed. Enjoy the alpha.</p>
+          </div>
+        </>)}
+
+        {state === 'expired' && (<>
+          <div style={{ textAlign: 'center', padding: '20px 0' }}>
+            <div style={{ fontSize: 28, marginBottom: 12 }}>🔐</div>
+            <h3 style={{ fontFamily: '"Playfair Display",serif', fontSize: 20, fontWeight: 400, marginBottom: 10 }}>Session expired</h3>
+            <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 24, lineHeight: 1.65 }}>
+              Your Circle session has expired. Reconnect with your email and PIN to continue.
+            </p>
+            <button onClick={() => { onClose?.(); onReconnect?.(); }} style={BTN(true)}>Reconnect Wallet →</button>
+            <button onClick={onClose} style={{ ...BTN(false), marginTop: 10, justifyContent: 'center' }}>Cancel</button>
           </div>
         </>)}
 

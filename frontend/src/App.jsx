@@ -1,14 +1,21 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { useAccount } from 'wagmi';
+import { useAccount, useSignMessage } from 'wagmi';
 import WalletModal from './components/WalletModal';
 import CircleUnlockModal from './components/CircleUnlockModal';
 import SignalDetail from './components/SignalDetail';
 import LandingPage from './pages/LandingPage';
 import FeedPage from './pages/FeedPage';
 
+const SESSION_TTL = 24 * 60 * 60 * 1000;
+
+function safeParseSession() {
+  try { return JSON.parse(localStorage.getItem('circle_session') || 'null'); } catch { return null; }
+}
+
 export default function App() {
   const { address: wagmiAddress } = useAccount();
+  const { signMessageAsync } = useSignMessage();
   const [walletOpen, setWalletOpen] = useState(false);
   const [wallet, setWallet] = useState(null);
   const [selectedSignal, setSelectedSignal] = useState(null);
@@ -30,8 +37,17 @@ export default function App() {
 
   useEffect(() => {
     if (!wagmiAddress) {
-      const saved = localStorage.getItem('ac_wallet');
-      if (saved) setWallet(saved);
+      // Auto-connect Circle wallet if session is < 24h old
+      const session = safeParseSession();
+      if (session?.userToken && session?.walletAddress && Date.now() - (session.timestamp || 0) < SESSION_TTL) {
+        setWallet(session.walletAddress);
+        localStorage.setItem('ac_wallet', session.walletAddress);
+        localStorage.setItem('ac_wallet_type', 'circle');
+        if (session.email) localStorage.setItem('ac_wallet_email', session.email);
+      } else {
+        const saved = localStorage.getItem('ac_wallet');
+        if (saved) setWallet(saved);
+      }
     }
     fetchSignals();
     fetchStats();
@@ -102,22 +118,38 @@ export default function App() {
       return;
     }
 
-    // MetaMask / generic wallet → direct mock payment
-    const mockTxHash = '0x' + Math.random().toString(16).slice(2).padEnd(64, '0');
+    // MetaMask / Rabby — use wagmi's signMessage for cross-wallet compatibility
     try {
+      const message = `AlphaChef unlock signal ${signal.id}`;
+      let signature;
+      if (wagmiAddress) {
+        // Wagmi-connected wallet (MetaMask, Rabby, etc.) — use wagmi's signer
+        signature = await signMessageAsync({ message });
+      } else if (window.ethereum) {
+        // Fallback: window.ethereum for non-wagmi injected wallets
+        signature = await window.ethereum.request({
+          method: 'personal_sign',
+          params: [message, wallet],
+        });
+      } else {
+        alert('No wallet provider found. Please install MetaMask or Rabby.');
+        return;
+      }
       const r = await fetch('/api/unlock', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ signal_id: signal.id, wallet_address: wallet, tx_hash: mockTxHash }),
+        body: JSON.stringify({ signal_id: signal.id, wallet_address: wallet, tx_hash: signature, message }),
       });
       const data = await r.json();
       if (data.success) {
         if (data.signal) setSelectedSignal(data.signal);
         fetchSignals();
         fetchStats();
+      } else {
+        alert(data.error || 'Unlock failed');
       }
     } catch (e) {
-      console.error(e);
+      if (e.code !== 4001) alert(e.message || 'Unlock failed'); // 4001 = user rejected
     }
   }
 
@@ -163,6 +195,7 @@ export default function App() {
           appId={appId}
           onSuccess={handleUnlockSuccess}
           onClose={() => setUnlockSignal(null)}
+          onReconnect={() => { setUnlockSignal(null); setWalletOpen(true); }}
         />
       )}
 
