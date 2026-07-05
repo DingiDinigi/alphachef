@@ -1,14 +1,27 @@
+import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
 export default function Nav({ onConnect, wallet }) {
   const { pathname } = useLocation();
   const base = pathname === '/feed' ? '/' : '';
+  const [copied, setCopied] = useState(false);
 
   const hashLinks = [
     { label: 'How It Works', hash: 'how-it-works' },
     { label: 'The Agent', hash: 'the-agent' },
     { label: 'Roadmap', hash: 'roadmap' },
   ];
+
+  function handleWalletClick() {
+    if (wallet) {
+      navigator.clipboard.writeText(wallet).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      });
+    } else {
+      onConnect();
+    }
+  }
 
   return (
     <nav style={{
@@ -34,13 +47,13 @@ export default function Nav({ onConnect, wallet }) {
           </a>
         ))}
       </div>
-      <button onClick={onConnect} style={{
+      <button onClick={handleWalletClick} title={wallet || undefined} style={{
         background: 'var(--gold)', color: '#0a0a08', padding: '10px 22px',
         borderRadius: 100, fontSize: 13, fontWeight: 700, border: 'none', cursor: 'pointer',
         display: 'flex', alignItems: 'center', gap: 8,
       }}>
         <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--green)', display: 'inline-block' }} />
-        {wallet ? `${wallet.slice(0,6)}...${wallet.slice(-4)}` : 'Connect Wallet'}
+        {wallet ? (copied ? 'Copied!' : `${wallet.slice(0,6)}...${wallet.slice(-4)}`) : 'Connect Wallet'}
       </button>
     </nav>
   );
