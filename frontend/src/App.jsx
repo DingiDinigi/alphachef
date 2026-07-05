@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { useAccount } from 'wagmi';
 import WalletModal from './components/WalletModal';
+import CircleUnlockModal from './components/CircleUnlockModal';
 import SignalDetail from './components/SignalDetail';
 import LandingPage from './pages/LandingPage';
 import FeedPage from './pages/FeedPage';
@@ -11,14 +12,18 @@ export default function App() {
   const [walletOpen, setWalletOpen] = useState(false);
   const [wallet, setWallet] = useState(null);
   const [selectedSignal, setSelectedSignal] = useState(null);
+  const [unlockSignal, setUnlockSignal] = useState(null); // Circle PIN modal target
+  const [appId, setAppId] = useState('');
   const [signals, setSignals] = useState([]);
   const [stats, setStats] = useState({ total_signals: 0, total_unlocks: 0, total_revenue_usdc: 0, high_confidence_signals: 0, agent_logs: [] });
 
-  // Sync wagmi wallet connection to app state
+  // Sync MetaMask / wagmi wallet
   useEffect(() => {
     if (wagmiAddress) {
       setWallet(wagmiAddress);
       localStorage.setItem('ac_wallet', wagmiAddress);
+      localStorage.setItem('ac_wallet_type', 'metamask');
+      localStorage.removeItem('ac_wallet_email');
       setWalletOpen(false);
     }
   }, [wagmiAddress]);
@@ -30,6 +35,9 @@ export default function App() {
     }
     fetchSignals();
     fetchStats();
+
+    // Fetch Circle appId for W3S SDK
+    fetch('/api/wallet/config').then(r => r.json()).then(d => setAppId(d.appId || '')).catch(() => {});
 
     const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${wsProto}//${window.location.host}/ws`);
@@ -64,18 +72,30 @@ export default function App() {
     } catch (_) {}
   }
 
-  function connectWallet(address) {
+  // Called by WalletModal for both Circle and MetaMask paths
+  function connectWallet(address, email, type) {
     setWallet(address);
     localStorage.setItem('ac_wallet', address);
+    localStorage.setItem('ac_wallet_type', type || 'metamask');
+    if (email) localStorage.setItem('ac_wallet_email', email);
+    else localStorage.removeItem('ac_wallet_email');
     setWalletOpen(false);
     fetchSignals();
   }
 
   async function handleUnlock(signal) {
-    if (!wallet) {
-      setWalletOpen(true);
+    if (!wallet) { setWalletOpen(true); return; }
+
+    const walletType = localStorage.getItem('ac_wallet_type');
+    const email = localStorage.getItem('ac_wallet_email');
+
+    // Circle wallet → PIN modal
+    if (walletType === 'circle' && email) {
+      setUnlockSignal(signal);
       return;
     }
+
+    // MetaMask / generic wallet → direct mock payment
     const mockTxHash = '0x' + Math.random().toString(16).slice(2).padEnd(64, '0');
     try {
       const r = await fetch('/api/unlock', {
@@ -95,11 +115,14 @@ export default function App() {
   }
 
   function openDetail(signal) {
-    if (signal.unlocked) {
-      setSelectedSignal(signal);
-    } else {
-      handleUnlock(signal);
-    }
+    if (signal.unlocked) setSelectedSignal(signal);
+    else handleUnlock(signal);
+  }
+
+  function handleUnlockSuccess() {
+    setUnlockSignal(null);
+    fetchSignals();
+    fetchStats();
   }
 
   const pageProps = {
@@ -117,16 +140,24 @@ export default function App() {
         <Route path="/" element={<LandingPage {...pageProps} />} />
         <Route path="/feed" element={<FeedPage {...pageProps} />} />
       </Routes>
+
       {walletOpen && (
         <WalletModal
           onClose={() => setWalletOpen(false)}
-          onConnect={(addr) => {
-            setWallet(addr);
-            localStorage.setItem('ac_wallet', addr);
-            setWalletOpen(false);
-          }}
+          onConnect={connectWallet}
         />
       )}
+
+      {unlockSignal && (
+        <CircleUnlockModal
+          email={localStorage.getItem('ac_wallet_email')}
+          signalId={unlockSignal.id}
+          appId={appId}
+          onSuccess={handleUnlockSuccess}
+          onClose={() => setUnlockSignal(null)}
+        />
+      )}
+
       {selectedSignal && <SignalDetail signal={selectedSignal} onClose={() => setSelectedSignal(null)} />}
     </BrowserRouter>
   );

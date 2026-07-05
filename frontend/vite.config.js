@@ -11,6 +11,7 @@ export default defineConfig({
     port: 5173,
     allowedHosts: ['alphachef.site', 'www.alphachef.site'],
     proxy: {
+      '/api/wallet': 'http://localhost:3015',
       '/api': 'http://localhost:3011',
       '/socket.io': { target: 'http://localhost:3011', ws: true },
       '/ws': { target: 'ws://localhost:3011', ws: true },
