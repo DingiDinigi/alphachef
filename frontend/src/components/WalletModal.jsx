@@ -43,22 +43,23 @@ console.log('[W3SSdk] VITE_CIRCLE_APP_ID:', CIRCLE_APP_ID || '(empty — check .
 
 // Module-level singleton. _loginCallback is swapped in before each verifyOtp()
 // call so the component can forward the onLoginComplete result to React state.
+// _deviceIdPromise caches the single getDeviceId() call — the SDK returns a
+// Promise (not callback-based), so we must await it directly.
 let _sdk = null;
 let _loginCallback = null;
+let _deviceIdPromise = null;
 
 function getSdk() {
   if (!_sdk) {
-    // Second arg must be the callback function itself (not an object wrapper).
-    // It receives (error, result) — forwarded to _loginCallback which is swapped
-    // in before each verifyOtp() call.
     _sdk = new W3SSdk(
       { appSettings: { appId: CIRCLE_APP_ID } },
       (error, result) => _loginCallback?.(error, result),
     );
-    _sdk.getDeviceId((err, deviceId) => {
-      if (err) console.warn('[W3SSdk] getDeviceId error:', err);
-      else console.log('[W3SSdk] deviceId:', deviceId);
-    });
+    _deviceIdPromise = _sdk.getDeviceId();
+    _deviceIdPromise.then(
+      (id) => console.log('[W3SSdk] deviceId:', id),
+      (err) => console.warn('[W3SSdk] getDeviceId error:', err),
+    );
   }
   return _sdk;
 }
@@ -76,11 +77,9 @@ export default function WalletModal({ onClose, onConnect }) {
     if (!email.trim()) return;
     setLoading(true); setErrMsg('');
     try {
-      // Get the SDK's own deviceId — Circle registers this during createDeviceTokenForEmailLogin
-      // so verifyOtp() can find it later. Using a random UUID here causes "device ID not found".
-      const sdkDeviceId = await new Promise((resolve, reject) =>
-        getSdk().getDeviceId((err, id) => err ? reject(err) : resolve(id))
-      );
+      // getDeviceId() returns a Promise — await the cached one (initialized in getSdk()).
+      getSdk(); // ensure SDK + _deviceIdPromise are initialized
+      const sdkDeviceId = await _deviceIdPromise;
       const r = await fetch('/api/wallet/init', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), deviceId: sdkDeviceId }),
