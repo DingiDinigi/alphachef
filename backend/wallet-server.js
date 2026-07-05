@@ -201,28 +201,26 @@ app.post('/api/wallet/finalize', async (req, res) => {
 // a signal unlock. Returns challengeId + fresh userToken for the W3S SDK.
 app.post('/api/wallet/unlock-challenge', async (req, res) => {
   if (!circleClient) return res.status(503).json({ error: 'Circle not configured' });
-  const { email, signal_id } = req.body;
+  const { email, signal_id, userToken } = req.body;
   if (!email || !signal_id) return res.status(400).json({ error: 'email and signal_id required' });
+  // Email OTP users authenticate client-side; userToken cannot be created server-side for them
+  if (!userToken) return res.status(400).json({ error: 'Session expired — please reconnect your wallet' });
 
   const user = db.prepare('SELECT * FROM wallet_users WHERE email = ?').get(email);
   if (!user?.wallet_address) return res.status(404).json({ error: 'No Circle wallet found for this email' });
-  if (!user.circle_user_id) return res.status(400).json({ error: 'Wallet not fully initialised — please reconnect' });
 
+  console.log(`[unlock-challenge] email=${email} walletId=${user.circle_wallet_id}`);
   try {
-    const tokenResp = await circleClient.createUserToken({ userId: user.circle_user_id });
-    const { userToken, encryptionKey } = tokenResp.data;
-
-    console.log(`[unlock-challenge] user row:`, JSON.stringify({ circle_wallet_id: user.circle_wallet_id, circle_user_id: user.circle_user_id, circle_blockchain: user.circle_blockchain }));
     const signResp = await circleClient.signMessage({
       userToken,
       walletId: user.circle_wallet_id,
       message: `AlphaChef signal unlock: ${signal_id}`,
     });
     const { challengeId } = signResp.data;
-
-    res.json({ challengeId, userToken, encryptionKey });
+    console.log('[unlock-challenge] signMessage OK challengeId:', challengeId);
+    res.json({ challengeId });
   } catch (e) {
-    console.error('/wallet/unlock-challenge error:', circleErr(e));
+    console.error('[unlock-challenge] FAILED:', JSON.stringify({ code: e?.code, status: e?.response?.status, message: e?.message, data: e?.response?.data }));
     res.status(500).json({ error: circleErr(e) });
   }
 });

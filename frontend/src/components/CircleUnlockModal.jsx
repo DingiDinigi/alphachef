@@ -30,14 +30,17 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
     let cancelled = false;
     (async () => {
       try {
+        // userToken from the OTP login session — can't regenerate server-side for email OTP users
+        const session = JSON.parse(sessionStorage.getItem('circle_session') || 'null');
+        if (!session?.userToken) throw new Error('Session expired — please reconnect your wallet');
         const r = await fetch('/api/wallet/unlock-challenge', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, signal_id: signalId }),
+          body: JSON.stringify({ email, signal_id: signalId, userToken: session.userToken }),
         });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error);
         if (!cancelled) {
-          challengeRef.current = { challengeId: d.challengeId, userToken: d.userToken, encryptionKey: d.encryptionKey };
+          challengeRef.current = { challengeId: d.challengeId, userToken: session.userToken, encryptionKey: session.encryptionKey };
           setState('ready');
         }
       } catch (e) {
