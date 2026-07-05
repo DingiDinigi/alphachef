@@ -48,9 +48,12 @@ let _loginCallback = null;
 
 function getSdk() {
   if (!_sdk) {
+    // Second arg must be the callback function itself (not an object wrapper).
+    // It receives (error, result) — forwarded to _loginCallback which is swapped
+    // in before each verifyOtp() call.
     _sdk = new W3SSdk(
       { appSettings: { appId: CIRCLE_APP_ID } },
-      { onLoginComplete: (result) => _loginCallback?.(result) },
+      (error, result) => _loginCallback?.(error, result),
     );
     _sdk.getDeviceId((err, deviceId) => {
       if (err) console.warn('[W3SSdk] getDeviceId error:', err);
@@ -105,8 +108,14 @@ export default function WalletModal({ onClose, onConnect }) {
     // Capture email now (React state); wire result to confirm before verifyOtp fires.
     const currentEmail = email.trim();
     _loginCallback = null; // clear any stale callback first
-    _loginCallback = async (result) => {
+    // onLoginComplete fires as (error, result) — handle both arms.
+    _loginCallback = async (error, result) => {
       _loginCallback = null;
+      if (error) {
+        setErrMsg(error.message || 'OTP verification failed');
+        setView('err');
+        return;
+      }
       const userToken = result?.userToken || deviceToken;
       const encryptionKey = result?.encryptionKey || deviceEncryptionKey;
       try {
@@ -125,8 +134,11 @@ export default function WalletModal({ onClose, onConnect }) {
       }
     };
 
+    // updateConfigs replaces this.configs entirely — must include appSettings
+    // so the iframe serviceUrl is not lost. loginConfigs has no email field.
     s.updateConfigs({
-      loginConfigs: { deviceToken, deviceEncryptionKey, otpToken, email: currentEmail },
+      appSettings: { appId: CIRCLE_APP_ID },
+      loginConfigs: { deviceToken, deviceEncryptionKey, otpToken },
     });
     setView('pin');
     s.verifyOtp();
