@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { W3SSdk } from '@circle-fin/w3s-pw-web-sdk';
 
@@ -38,8 +38,21 @@ const LABEL = {
   textTransform: 'uppercase', color: 'var(--dim)', marginBottom: 14,
 };
 
+const CIRCLE_APP_ID = import.meta.env.VITE_CIRCLE_APP_ID || '';
+
 let _sdk = null;
-function sdk() { if (!_sdk) _sdk = new W3SSdk(); return _sdk; }
+function sdk() {
+  if (!_sdk) {
+    _sdk = new W3SSdk();
+    if (CIRCLE_APP_ID) _sdk.setAppSettings({ appId: CIRCLE_APP_ID });
+    // getDeviceId() is required by the W3S SDK after initialization
+    _sdk.getDeviceId((err, deviceId) => {
+      if (err) console.warn('[W3SSdk] getDeviceId error:', err);
+      else console.log('[W3SSdk] deviceId:', deviceId);
+    });
+  }
+  return _sdk;
+}
 
 export default function WalletModal({ onClose, onConnect }) {
   const [view, setView] = useState('main'); // main | email | sent | pin | success | err
@@ -48,11 +61,6 @@ export default function WalletModal({ onClose, onConnect }) {
   const [errMsg, setErrMsg] = useState('');
   const [walletAddr, setWalletAddr] = useState('');
   const sessionRef = useRef({}); // holds { deviceToken, deviceEncryptionKey, challengeId }
-  const appIdRef = useRef('');
-
-  useEffect(() => {
-    fetch('/api/wallet/config').then(r => r.json()).then(d => { appIdRef.current = d.appId || ''; }).catch(() => {});
-  }, []);
 
   async function submitEmail(e) {
     e.preventDefault();
@@ -87,7 +95,6 @@ export default function WalletModal({ onClose, onConnect }) {
   function executePinChallenge() {
     const { deviceToken, deviceEncryptionKey, challengeId } = sessionRef.current;
     const s = sdk();
-    if (appIdRef.current) s.setAppSettings({ appId: appIdRef.current });
     s.setAuthentication({ userToken: deviceToken, encryptionKey: deviceEncryptionKey });
     setView('pin');
 

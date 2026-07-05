@@ -55,7 +55,9 @@ for (const col of ['circle_wallet_id TEXT', 'circle_blockchain TEXT']) {
 }
 
 const apiKey = process.env.CIRCLE_API_KEY || '';
+const appId  = process.env.CIRCLE_APP_ID  || '';
 console.log(`[wallet-server] CIRCLE_API_KEY loaded: ${apiKey ? apiKey.slice(0, 8) + '…' : '(empty — check .env)'}`);
+console.log(`[wallet-server] CIRCLE_APP_ID loaded: ${appId ? appId.slice(0, 8) + '…' : '(empty — check .env)'}`);
 
 const circleClient = apiKey
   ? new CircleUserControlledWalletsClient({ apiKey })
@@ -68,18 +70,8 @@ function circleErr(e) {
 }
 
 // ── GET /api/wallet/config ─────────────────────────────────────────────────
-// Returns the Circle appId needed to initialise the W3S browser SDK.
-app.get('/api/wallet/config', async (req, res) => {
-  if (!circleClient) return res.status(503).json({ error: 'Circle not configured' });
-  try {
-    const resp = await fetch('https://api.circle.com/v1/w3s/config/entity/appId', {
-      headers: { Authorization: `Bearer ${process.env.CIRCLE_API_KEY}` },
-    });
-    const json = await resp.json();
-    res.json({ appId: json.data?.appId || '' });
-  } catch (e) {
-    res.status(500).json({ error: circleErr(e) });
-  }
+app.get('/api/wallet/config', (req, res) => {
+  res.json({ appId });
 });
 
 // ── POST /api/wallet/init ──────────────────────────────────────────────────
