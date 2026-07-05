@@ -156,20 +156,27 @@ app.post('/api/wallet/confirm', async (req, res) => {
 });
 
 // ── POST /api/wallet/finalize ──────────────────────────────────────────────
-// Called after sdk.execute(challengeId) succeeds (wallet actually created).
-// Lists wallets for the userToken, stores in DB, returns walletAddress.
+// Called after sdk.execute(challengeId) succeeds. Circle provisions wallets
+// asynchronously, so we poll listWallets up to 8 times (16 seconds total).
 app.post('/api/wallet/finalize', async (req, res) => {
   if (!circleClient) return res.status(503).json({ error: 'Circle not configured' });
   const { email, userToken } = req.body;
   if (!email || !userToken) return res.status(400).json({ error: 'email and userToken required' });
 
-  try {
-    console.log(`[wallet/finalize] Calling listWallets for ${email}`);
-    const walletsResp = await circleClient.listWallets({ userToken });
-    console.log('[wallet/finalize] listWallets response:', JSON.stringify(walletsResp.data));
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-    const wallets = walletsResp.data?.wallets || [];
-    if (!wallets.length) return res.status(404).json({ error: 'Wallet not found after challenge execution' });
+  try {
+    let wallets = [];
+    for (let attempt = 1; attempt <= 8; attempt++) {
+      console.log(`[wallet/finalize] listWallets attempt ${attempt} for ${email}`);
+      const walletsResp = await circleClient.listWallets({ userToken });
+      wallets = walletsResp.data?.wallets || [];
+      console.log(`[wallet/finalize] attempt ${attempt}: ${wallets.length} wallet(s)`);
+      if (wallets.length > 0) break;
+      if (attempt < 8) await sleep(2000);
+    }
+
+    if (!wallets.length) return res.status(404).json({ error: 'Wallet not available — Circle provisioning timed out. Please try again.' });
 
     const { address: walletAddress, id: circleWalletId, blockchain, userId: circleUserId } = wallets[0];
     db.prepare(`
