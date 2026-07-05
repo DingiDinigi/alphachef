@@ -112,7 +112,10 @@ export default function WalletModal({ onClose, onConnect }) {
     // Capture email now (React state); wire result to confirm before verifyOtp fires.
     const currentEmail = email.trim();
     _loginCallback = null; // clear any stale callback first
-    // onLoginComplete fires as (error, result) — handle both arms.
+    // onLoginComplete fires as (error, result) after OTP + PIN setup.
+    // result = { userToken, encryptionKey } for the verified session.
+    // We then: 1) get wallet challengeId from server, 2) execute it in SDK,
+    // 3) finalize to fetch the wallet address.
     _loginCallback = async (error, result) => {
       _loginCallback = null;
       if (error) {
@@ -120,18 +123,61 @@ export default function WalletModal({ onClose, onConnect }) {
         setView('err');
         return;
       }
-      const userToken = result?.userToken || deviceToken;
-      const encryptionKey = result?.encryptionKey || deviceEncryptionKey;
+      const userToken = result?.userToken;
+      const encryptionKey = result?.encryptionKey;
+      if (!userToken) {
+        setErrMsg('Circle did not return a userToken — please try again');
+        setView('err');
+        return;
+      }
       try {
-        const r = await fetch('/api/wallet/confirm', {
+        // Step 1: get wallet-creation challengeId from server
+        const confirmR = await fetch('/api/wallet/confirm', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: currentEmail, userToken, encryptionKey }),
+          body: JSON.stringify({ email: currentEmail, userToken }),
         });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.error);
-        setWalletAddr(d.walletAddress);
-        setView('success');
-        onConnect?.(d.walletAddress, currentEmail, 'circle');
+        const confirmD = await confirmR.json();
+        if (!confirmR.ok) throw new Error(confirmD.error);
+
+        if (confirmD.isExisting) {
+          // User already initialized — wallet exists, fetch it directly
+          const finR = await fetch('/api/wallet/finalize', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: currentEmail, userToken }),
+          });
+          const finD = await finR.json();
+          if (!finR.ok) throw new Error(finD.error);
+          setWalletAddr(finD.walletAddress);
+          setView('success');
+          onConnect?.(finD.walletAddress, currentEmail, 'circle');
+          return;
+        }
+
+        // Step 2: execute the wallet-creation challenge in the SDK
+        const { challengeId } = confirmD;
+        s.setAuthentication({ userToken, encryptionKey });
+        s.execute(challengeId, async (execErr) => {
+          if (execErr) {
+            setErrMsg(execErr.message || 'Wallet creation failed');
+            setView('err');
+            return;
+          }
+          // Step 3: wallet created — fetch address from server
+          try {
+            const finR = await fetch('/api/wallet/finalize', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: currentEmail, userToken }),
+            });
+            const finD = await finR.json();
+            if (!finR.ok) throw new Error(finD.error);
+            setWalletAddr(finD.walletAddress);
+            setView('success');
+            onConnect?.(finD.walletAddress, currentEmail, 'circle');
+          } catch (fe) {
+            setErrMsg(fe.message || 'Failed to fetch wallet');
+            setView('err');
+          }
+        });
       } catch (ce) {
         setErrMsg(ce.message || 'Wallet setup failed');
         setView('err');
