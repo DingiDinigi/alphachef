@@ -7,6 +7,7 @@ export default defineConfig({
     react(),
     nodePolyfills({ protocolImports: true }),
   ],
+  envDir: '..', // read .env from repo root (where VITE_CIRCLE_APP_ID lives)
   server: {
     port: 5173,
     allowedHosts: ['alphachef.site', 'www.alphachef.site'],
