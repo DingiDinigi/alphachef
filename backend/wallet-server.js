@@ -92,8 +92,11 @@ app.post('/api/wallet/init', async (req, res) => {
     }
 
     // ── New user: get device token + OTP challenge from Circle ───────────
-    const deviceId = uuidv4();
-    console.log(`[wallet/init] Calling createDeviceTokenForEmailLogin for ${email}`);
+    // deviceId must come from the SDK (getDeviceId) — using a random UUID
+    // causes "Provided device ID is not found" when verifyOtp() runs.
+    const deviceId = req.body.deviceId;
+    if (!deviceId) return res.status(400).json({ error: 'deviceId required — call sdk.getDeviceId() first' });
+    console.log(`[wallet/init] Calling createDeviceTokenForEmailLogin for ${email}, deviceId=${deviceId}`);
     const deviceResp = await circleClient.createDeviceTokenForEmailLogin({
       deviceId,
       email,

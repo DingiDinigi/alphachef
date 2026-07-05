@@ -76,9 +76,14 @@ export default function WalletModal({ onClose, onConnect }) {
     if (!email.trim()) return;
     setLoading(true); setErrMsg('');
     try {
+      // Get the SDK's own deviceId — Circle registers this during createDeviceTokenForEmailLogin
+      // so verifyOtp() can find it later. Using a random UUID here causes "device ID not found".
+      const sdkDeviceId = await new Promise((resolve, reject) =>
+        getSdk().getDeviceId((err, id) => err ? reject(err) : resolve(id))
+      );
       const r = await fetch('/api/wallet/init', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim() }),
+        body: JSON.stringify({ email: email.trim(), deviceId: sdkDeviceId }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error);
