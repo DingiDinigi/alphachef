@@ -72,7 +72,6 @@ export default function App() {
     } catch (_) {}
   }
 
-  // Called by WalletModal for both Circle and MetaMask paths
   function connectWallet(address, email, type) {
     setWallet(address);
     localStorage.setItem('ac_wallet', address);
@@ -81,6 +80,14 @@ export default function App() {
     else localStorage.removeItem('ac_wallet_email');
     setWalletOpen(false);
     fetchSignals();
+  }
+
+  function disconnectWallet() {
+    setWallet(null);
+    localStorage.removeItem('ac_wallet');
+    localStorage.removeItem('ac_wallet_type');
+    localStorage.removeItem('ac_wallet_email');
+    localStorage.removeItem('circle_session');
   }
 
   async function handleUnlock(signal) {
@@ -130,6 +137,7 @@ export default function App() {
     signals,
     stats,
     onWalletOpen: () => setWalletOpen(true),
+    onDisconnect: disconnectWallet,
     onUnlock: handleUnlock,
     onOpen: openDetail,
   };

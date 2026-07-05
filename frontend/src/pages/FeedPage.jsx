@@ -5,12 +5,12 @@ import Footer from '../components/Footer';
 
 const PAGE_SIZE = 9;
 
-export default function FeedPage({ wallet, signals, stats, onWalletOpen, onUnlock, onOpen }) {
+export default function FeedPage({ wallet, signals, stats, onWalletOpen, onDisconnect, onUnlock, onOpen }) {
   const [visible, setVisible] = useState(PAGE_SIZE);
 
   return (
     <div style={{ background: 'var(--bg)', minHeight: '100vh' }}>
-      <Nav onConnect={onWalletOpen} wallet={wallet} />
+      <Nav onWalletOpen={onWalletOpen} onDisconnect={onDisconnect} wallet={wallet} />
       <LiveFeed
         signals={signals.slice(0, visible)}
         onUnlock={onUnlock}

@@ -9,10 +9,10 @@ import Stats from '../components/Stats';
 import FAQ from '../components/FAQ';
 import Footer from '../components/Footer';
 
-export default function LandingPage({ wallet, signals, stats, onWalletOpen, onUnlock, onOpen }) {
+export default function LandingPage({ wallet, signals, stats, onWalletOpen, onDisconnect, onUnlock, onOpen }) {
   return (
     <div style={{ background: 'var(--bg)', minHeight: '100vh' }}>
-      <Nav onConnect={onWalletOpen} wallet={wallet} />
+      <Nav onWalletOpen={onWalletOpen} onDisconnect={onDisconnect} wallet={wallet} />
       <Hero
         onBrowse={() => document.getElementById('signal-preview')?.scrollIntoView({ behavior: 'smooth' })}
         stats={stats}

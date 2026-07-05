@@ -147,7 +147,7 @@ export default function WalletModal({ onClose, onConnect }) {
           });
           const finD = await finR.json();
           if (!finR.ok) throw new Error(finD.error);
-          sessionStorage.setItem('circle_session', JSON.stringify({ userToken, encryptionKey }));
+          localStorage.setItem('circle_session', JSON.stringify({ userToken, encryptionKey }));
           setWalletAddr(finD.walletAddress);
           setView('success');
           onConnect?.(finD.walletAddress, currentEmail, 'circle');
@@ -172,7 +172,7 @@ export default function WalletModal({ onClose, onConnect }) {
             const finD = await finR.json();
             if (!finR.ok) throw new Error(finD.error);
             // Persist userToken so CircleUnlockModal can use it without re-auth
-            sessionStorage.setItem('circle_session', JSON.stringify({ userToken, encryptionKey }));
+            localStorage.setItem('circle_session', JSON.stringify({ userToken, encryptionKey }));
             setWalletAddr(finD.walletAddress);
             setView('success');
             onConnect?.(finD.walletAddress, currentEmail, 'circle');
