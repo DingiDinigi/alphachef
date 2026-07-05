@@ -4,7 +4,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "wallet": "node wallet-server.js",
+    "dev:wallet": "pm2 start wallet-server.js --name alphachef-wallet || pm2 restart alphachef-wallet"
   },
   "dependencies": {
     "@circle-fin/user-controlled-wallets": "^10.8.0",
