@@ -143,6 +143,7 @@ export default function WalletModal({ onClose, onConnect }) {
       }
       const userToken = result?.userToken;
       const encryptionKey = result?.encryptionKey;
+      const refreshToken = result?.refreshToken || null;
       if (!userToken) {
         setErrMsg('Circle did not return a userToken — please try again');
         setView('err');
@@ -160,7 +161,7 @@ export default function WalletModal({ onClose, onConnect }) {
           // Returning user re-authenticated via OTP — wallet already set up
           const walletAddress = sessionRef.current.walletAddress;
           localStorage.setItem('circle_session', JSON.stringify({
-            userToken, encryptionKey, walletAddress, email: currentEmail, timestamp: Date.now(),
+            userToken, encryptionKey, refreshToken, walletAddress, email: currentEmail, timestamp: Date.now(),
           }));
           setWalletAddr(walletAddress);
           setView('success');
@@ -185,7 +186,7 @@ export default function WalletModal({ onClose, onConnect }) {
             const finD = await finR.json();
             if (!finR.ok) throw new Error(finD.error);
             localStorage.setItem('circle_session', JSON.stringify({
-              userToken, encryptionKey, walletAddress: finD.walletAddress, email: currentEmail, timestamp: Date.now(),
+              userToken, encryptionKey, refreshToken, walletAddress: finD.walletAddress, email: currentEmail, timestamp: Date.now(),
             }));
             setWalletAddr(finD.walletAddress);
             setView('success');

@@ -274,6 +274,33 @@ app.post('/api/wallet/create-payment', async (req, res) => {
   }
 });
 
+// ── POST /api/wallet/refresh-token ────────────────────────────────────────
+// Exchanges a Circle refreshToken for a new userToken silently (no OTP required).
+app.post('/api/wallet/refresh-token', async (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken) return res.status(400).json({ error: 'refreshToken required' });
+  try {
+    const r = await fetch('https://api.circle.com/v1/w3s/user/token/refresh', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      console.warn('[refresh-token] Circle rejected refresh:', d.message);
+      return res.status(401).json({ error: d.message || 'Token refresh failed' });
+    }
+    res.json({
+      userToken: d.data?.userToken,
+      encryptionKey: d.data?.encryptionKey,
+      refreshToken: d.data?.refreshToken,
+    });
+  } catch (e) {
+    console.error('[refresh-token] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── GET /api/wallet/balance ────────────────────────────────────────────────
 // Queries on-chain USDC balance from ARC testnet (chain 5042002).
 // Returns amount and wallet address so the UI can show where to send funds.

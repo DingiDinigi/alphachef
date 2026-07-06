@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { W3SSdk } from '@circle-fin/w3s-pw-web-sdk';
 
 const OVERLAY = {
@@ -28,29 +29,75 @@ let _sdk = null;
 function getSdk() { if (!_sdk) _sdk = new W3SSdk(); return _sdk; }
 
 export default function CircleUnlockModal({ email, signalId, appId, onSuccess, onClose, onReconnect }) {
+  const navigate = useNavigate();
   const [state, setState] = useState('loading');
   const [errMsg, setErrMsg] = useState('');
   const [balance, setBalance] = useState('');
   const [walletAddr, setWalletAddr] = useState('');
+  const [retryLoading, setRetryLoading] = useState(false);
+  const [retryBalance, setRetryBalance] = useState('');
   const challengeRef = useRef({ challengeId: '', userToken: '', encryptionKey: '' });
+
+  async function tryRefreshToken(session) {
+    if (!session?.refreshToken) return null;
+    try {
+      const r = await fetch('/api/wallet/refresh-token', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: session.refreshToken }),
+      });
+      if (!r.ok) return null;
+      const d = await r.json();
+      if (!d.userToken) return null;
+      const newSession = { ...session, userToken: d.userToken, encryptionKey: d.encryptionKey || session.encryptionKey, timestamp: Date.now() };
+      if (d.refreshToken) newSession.refreshToken = d.refreshToken;
+      localStorage.setItem('circle_session', JSON.stringify(newSession));
+      return { userToken: d.userToken, encryptionKey: newSession.encryptionKey };
+    } catch { return null; }
+  }
+
+  async function fetchPayment(userToken) {
+    const r = await fetch('/api/wallet/create-payment', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, signal_id: signalId, userToken }),
+    });
+    const d = await r.json();
+    return { ok: r.ok, data: d };
+  }
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const session = safeParseSession();
-        if (!session?.userToken) { if (!cancelled) setState('expired'); return; }
-        if (Date.now() - (session.timestamp || 0) > SESSION_TTL) { if (!cancelled) setState('expired'); return; }
+        let session = safeParseSession();
+        let userToken = session?.userToken;
+        let encKey = session?.encryptionKey;
 
-        const r = await fetch('/api/wallet/create-payment', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, signal_id: signalId, userToken: session.userToken }),
-        });
-        const d = await r.json();
+        // Session missing or TTL-expired → try silent token refresh first
+        if (!userToken || Date.now() - (session.timestamp || 0) > SESSION_TTL) {
+          const refreshed = await tryRefreshToken(session);
+          if (!refreshed) { if (!cancelled) setState('expired'); return; }
+          userToken = refreshed.userToken;
+          encKey = refreshed.encryptionKey;
+          session = safeParseSession();
+        }
 
-        if (!r.ok) {
-          if (d.error?.includes('Insufficient') || d.error?.includes('indexed')) {
-            if (!cancelled) { setErrMsg(d.error); setWalletAddr(d.walletAddress || ''); setState('insufficient'); }
+        let { ok, data } = await fetchPayment(userToken);
+
+        // Auth error (not a balance issue) → try silent token refresh once, then retry
+        if (!ok && !data.error?.includes('Insufficient') && !data.error?.includes('indexed')) {
+          const refreshed = await tryRefreshToken(session);
+          if (!refreshed) { if (!cancelled) setState('expired'); return; }
+          userToken = refreshed.userToken;
+          encKey = refreshed.encryptionKey;
+          session = safeParseSession();
+          const retry = await fetchPayment(userToken);
+          ok = retry.ok;
+          data = retry.data;
+        }
+
+        if (!ok) {
+          if (data.error?.includes('Insufficient') || data.error?.includes('indexed')) {
+            if (!cancelled) { setErrMsg(data.error); setWalletAddr(data.walletAddress || ''); setState('insufficient'); }
           } else if (!cancelled) {
             setState('expired');
           }
@@ -58,8 +105,8 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
         }
 
         if (!cancelled) {
-          challengeRef.current = { challengeId: d.challengeId, userToken: session.userToken, encryptionKey: session.encryptionKey };
-          setBalance(d.balance || '');
+          challengeRef.current = { challengeId: data.challengeId, userToken, encryptionKey: encKey };
+          setBalance(data.balance || '');
           setState('ready');
         }
       } catch (e) {
@@ -68,6 +115,44 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
     })();
     return () => { cancelled = true; };
   }, [email, signalId]);
+
+  async function handleRetry() {
+    setRetryLoading(true);
+    setRetryBalance('');
+    try {
+      const r = await fetch(`/api/wallet/balance?email=${encodeURIComponent(email)}`);
+      const d = await r.json();
+      const bal = parseFloat(d.balance || '0');
+      setRetryBalance(d.balance || '0');
+
+      if (bal >= 0.05) {
+        // Balance now sufficient — proceed to payment
+        setState('loading');
+        const session = safeParseSession();
+        const userToken = session?.userToken;
+        const encKey = session?.encryptionKey;
+        if (!userToken) { setState('expired'); return; }
+        const { ok, data } = await fetchPayment(userToken);
+        if (!ok) {
+          if (data.error?.includes('Insufficient') || data.error?.includes('indexed')) {
+            setRetryBalance(data.balance || d.balance || '0');
+            setState('insufficient');
+          } else {
+            setState('expired');
+          }
+          return;
+        }
+        challengeRef.current = { challengeId: data.challengeId, userToken, encryptionKey: encKey };
+        setBalance(data.balance || '');
+        setState('ready');
+      }
+      // else stay on insufficient — retryBalance state already shows the current amount
+    } catch (_) {
+      setRetryBalance('0');
+    } finally {
+      setRetryLoading(false);
+    }
+  }
 
   function handlePin() {
     const { challengeId, userToken, encryptionKey } = challengeRef.current;
@@ -154,20 +239,40 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
             <h3 style={{ fontFamily: '"Playfair Display",serif', fontSize: 20, fontWeight: 400, marginBottom: 10, color: '#ff6b6b' }}>
               Insufficient USDC
             </h3>
-            <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14, lineHeight: 1.65 }}>
+            <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: retryBalance ? 6 : 14, lineHeight: 1.65 }}>
               You need at least $0.05 USDC on <strong style={{ color: 'var(--white)' }}>ARC testnet</strong>.
-              Send testnet USDC to this address:
             </p>
+            {retryBalance !== '' && (
+              <p style={{ fontSize: 13, marginBottom: 14 }}>
+                Current balance: <strong style={{ color: parseFloat(retryBalance) >= 0.05 ? '#4caf50' : '#ff6b6b' }}>{retryBalance} USDC</strong>
+              </p>
+            )}
             {walletAddr && (
               <div style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--gold)', wordBreak: 'break-all', background: 'rgba(201,162,39,.06)', border: '1px solid rgba(201,162,39,.15)', borderRadius: 8, padding: '8px 12px', marginBottom: 18 }}>
                 {walletAddr}
               </div>
             )}
-            <a href="https://faucet.circle.com/" target="_blank" rel="noreferrer"
-              style={{ display: 'block', ...BTN(true), textDecoration: 'none', marginBottom: 10 }}>
-              Go to Circle Faucet →
+            <a
+              href="https://faucet.circle.com/"
+              target="_blank"
+              rel="noreferrer"
+              style={{ display: 'block', ...BTN(true), textDecoration: 'none', marginBottom: 10 }}
+            >
+              Get Free Test USDC →
             </a>
-            <button onClick={onClose} style={{ ...BTN(false) }}>Cancel</button>
+            <button
+              onClick={handleRetry}
+              disabled={retryLoading}
+              style={{ ...BTN(false), marginBottom: 10, opacity: retryLoading ? 0.6 : 1, cursor: retryLoading ? 'not-allowed' : 'pointer' }}
+            >
+              {retryLoading ? 'Checking balance…' : "I've funded my wallet — Try Again"}
+            </button>
+            <button
+              onClick={() => { onClose?.(); navigate('/feed'); }}
+              style={{ ...BTN(false) }}
+            >
+              ← Back to Feed
+            </button>
           </div>
         )}
 
