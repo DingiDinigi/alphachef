@@ -130,17 +130,20 @@ app.post('/api/wallet/init', async (req, res) => {
 });
 
 // ── POST /api/wallet/confirm ───────────────────────────────────────────────
-// Called after verifyOtp() succeeds. No PIN required.
-// Returns existing wallet address or generates a new one for new users.
-app.post('/api/wallet/confirm', (req, res) => {
-  const { email } = req.body;
+// Called after verifyOtp() succeeds.
+// Uses the deviceToken to fetch the real Circle wallet for this user.
+app.post('/api/wallet/confirm', async (req, res) => {
+  const { email, deviceToken, deviceEncryptionKey } = req.body;
   if (!email) return res.status(400).json({ error: 'email required' });
+
+  console.log('[wallet/confirm] email:', email, '| has deviceToken:', !!deviceToken);
 
   db.prepare('INSERT OR IGNORE INTO wallet_users (id, email) VALUES (?, ?)').run(uuidv4(), email);
   const user = db.prepare('SELECT * FROM wallet_users WHERE email = ?').get(email);
 
-  if (user?.wallet_address) {
-    console.log('[wallet/confirm] Returning user', email, 'wallet:', user.wallet_address);
+  // Returning user who already has a confirmed Circle wallet
+  if (user?.wallet_address && user?.circle_wallet_id) {
+    console.log('[wallet/confirm] Returning user, Circle wallet already stored:', user.wallet_address);
     return res.json({
       walletAddress: user.wallet_address,
       isExisting: true,
@@ -148,16 +151,43 @@ app.post('/api/wallet/confirm', (req, res) => {
     });
   }
 
-  // New user — generate a fresh Ethereum address
+  // Try to fetch the real Circle wallet using the fresh deviceToken
+  if (deviceToken && circleClient) {
+    try {
+      console.log('[wallet/confirm] Fetching Circle wallets with deviceToken...');
+      const walletsResp = await circleClient.listWallets({ userToken: deviceToken });
+      const wallets = walletsResp.data?.wallets || [];
+      console.log('[wallet/confirm] Circle wallets found:', wallets.length, wallets.map(w => `${w.blockchain}:${w.address}`).join(', '));
+
+      if (wallets.length > 0) {
+        const w = wallets[0];
+        db.prepare(
+          'UPDATE wallet_users SET wallet_address = ?, circle_wallet_id = ?, circle_blockchain = ? WHERE email = ?'
+        ).run(w.address, w.id, w.blockchain, email);
+        console.log('[wallet/confirm] Stored Circle wallet:', w.address, w.id, w.blockchain);
+        return res.json({
+          walletAddress: w.address,
+          isExisting: !!user.wallet_address,
+          hasPassword: !!user.password_hash,
+        });
+      }
+    } catch (e) {
+      console.error('[wallet/confirm] listWallets error:', circleErr(e));
+      // Fall through to fallback below
+    }
+  }
+
+  // Fallback: if user already has an address from before (could be old fake one), keep it
+  if (user?.wallet_address) {
+    console.log('[wallet/confirm] Returning old wallet address (no Circle wallet_id):', user.wallet_address);
+    return res.json({ walletAddress: user.wallet_address, isExisting: true, hasPassword: !!user.password_hash });
+  }
+
+  // Last resort: generate a placeholder address (Circle wallet may not exist yet)
   const generated = ethers.Wallet.createRandom();
   db.prepare('UPDATE wallet_users SET wallet_address = ? WHERE email = ?').run(generated.address, email);
-  console.log('[wallet/confirm] New user', email, 'generated wallet:', generated.address);
-
-  return res.json({
-    walletAddress: generated.address,
-    isExisting: false,
-    hasPassword: false,
-  });
+  console.log('[wallet/confirm] WARN: No Circle wallet found — using placeholder address:', generated.address);
+  return res.json({ walletAddress: generated.address, isExisting: false, hasPassword: false });
 });
 
 // ── POST /api/wallet/set-password ─────────────────────────────────────────
@@ -188,6 +218,127 @@ app.post('/api/wallet/verify-password', async (req, res) => {
   const valid = await checkPassword(password, user.password_hash);
   if (!valid) return res.status(401).json({ error: 'Incorrect password' });
   res.json({ success: true });
+});
+
+// ── POST /api/wallet/prepare-unlock ───────────────────────────────────────
+// Step 1 of the Circle transfer flow:
+//   1. Verify spend password
+//   2. Create a USDC transfer challenge on Circle (server-side)
+//   3. Return {challengeId, deviceToken, deviceEncryptionKey} to frontend
+// The frontend must then call sdk.execute(challengeId) for user approval,
+// then POST /api/unlock to record the unlock after Circle confirms.
+const PLATFORM_WALLET = process.env.PLATFORM_WALLET || '';
+const USDC_TOKEN_ADDRESS = process.env.USDC_TOKEN_ADDRESS || '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238'; // ETH-SEPOLIA USDC
+
+app.post('/api/wallet/prepare-unlock', async (req, res) => {
+  const { email, signalId, walletAddress, password, deviceToken, deviceEncryptionKey } = req.body;
+
+  console.log('[prepare-unlock] START —', {
+    email: email ? email.slice(0, 8) + '…' : '(missing)',
+    signalId: signalId || '(missing)',
+    walletAddress: walletAddress ? walletAddress.slice(0, 10) + '…' : '(missing)',
+    has_password: !!password,
+    has_deviceToken: !!deviceToken,
+  });
+
+  if (!email || !signalId || !walletAddress || !password) {
+    return res.status(400).json({ error: 'Missing required fields: email, signalId, walletAddress, password' });
+  }
+  if (!deviceToken) {
+    return res.status(401).json({
+      error: 'Session expired — please reconnect your Circle wallet to unlock signals.',
+      code: 'SESSION_EXPIRED',
+    });
+  }
+
+  // 1. Verify spend password
+  const user = db.prepare('SELECT * FROM wallet_users WHERE email = ?').get(email);
+  if (!user) return res.status(404).json({ error: 'Wallet account not found — please reconnect' });
+  if (!user.password_hash) {
+    return res.status(401).json({ error: 'No spend password set — please reconnect your wallet to set one' });
+  }
+  const validPwd = await checkPassword(password, user.password_hash);
+  if (!validPwd) {
+    console.log('[prepare-unlock] Invalid password for', email);
+    return res.status(401).json({ error: 'Incorrect spend password' });
+  }
+  console.log('[prepare-unlock] Password verified for', email);
+
+  // 2. Get signal details (shared SQLite DB with server.js)
+  const signal = db.prepare('SELECT * FROM signals WHERE id = ?').get(signalId);
+  if (!signal) return res.status(404).json({ error: 'Signal not found' });
+
+  // 3. Check already unlocked
+  const alreadyUnlocked = db.prepare(
+    'SELECT id FROM unlocks WHERE signal_id = ? AND LOWER(wallet_address) = LOWER(?)'
+  ).get(signalId, walletAddress);
+  if (alreadyUnlocked) {
+    console.log('[prepare-unlock] Signal already unlocked — skipping Circle challenge');
+    return res.json({ alreadyUnlocked: true });
+  }
+
+  // 4. Ensure we have the Circle wallet ID
+  let circleWalletId = user.circle_wallet_id;
+  let circleBlockchain = user.circle_blockchain || 'ETH-SEPOLIA';
+
+  if (!circleWalletId && circleClient) {
+    console.log('[prepare-unlock] circle_wallet_id missing — fetching from Circle via deviceToken');
+    try {
+      const walletsResp = await circleClient.listWallets({ userToken: deviceToken });
+      const wallets = walletsResp.data?.wallets || [];
+      console.log('[prepare-unlock] Circle wallets:', wallets.map(w => `${w.blockchain}:${w.address}`).join(', '));
+      if (wallets.length > 0) {
+        circleWalletId = wallets[0].id;
+        circleBlockchain = wallets[0].blockchain;
+        db.prepare(
+          'UPDATE wallet_users SET circle_wallet_id = ?, circle_blockchain = ?, wallet_address = ? WHERE email = ?'
+        ).run(circleWalletId, circleBlockchain, wallets[0].address, email);
+        console.log('[prepare-unlock] Stored Circle wallet ID:', circleWalletId, circleBlockchain);
+      }
+    } catch (e) {
+      console.error('[prepare-unlock] listWallets error:', circleErr(e));
+    }
+  }
+
+  if (!circleWalletId) {
+    return res.status(400).json({
+      error: 'No Circle wallet found — please reconnect your wallet so Circle can create it.',
+      code: 'NO_CIRCLE_WALLET',
+    });
+  }
+
+  if (!PLATFORM_WALLET) {
+    return res.status(500).json({ error: 'Platform wallet not configured (PLATFORM_WALLET env missing)' });
+  }
+
+  // 5. Create the Circle transfer challenge
+  const amount = (signal.price_usdc || 0.05).toFixed(4);
+  const transferReq = {
+    idempotencyKey: uuidv4(),
+    amounts: [amount],
+    destinationAddress: PLATFORM_WALLET,
+    tokenAddress: USDC_TOKEN_ADDRESS,
+    tokenBlockchain: circleBlockchain,
+    walletId: circleWalletId,
+    feeLevel: 'HIGH',
+    refId: signalId,
+  };
+  console.log('[prepare-unlock] Creating Circle transfer challenge:', JSON.stringify(transferReq));
+
+  try {
+    const challengeResp = await circleClient.createUserTransactionTransferChallenge(
+      deviceToken,
+      transferReq,
+    );
+    const { challengeId } = challengeResp.data;
+    console.log('[prepare-unlock] Got challengeId:', challengeId);
+
+    return res.json({ challengeId, deviceToken, deviceEncryptionKey });
+  } catch (e) {
+    const msg = circleErr(e);
+    console.error('[prepare-unlock] Circle createUserTransactionTransferChallenge error:', msg);
+    return res.status(500).json({ error: `Circle transfer creation failed: ${msg}` });
+  }
 });
 
 // ── GET /api/wallet/balance ────────────────────────────────────────────────

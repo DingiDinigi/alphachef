@@ -119,10 +119,22 @@ export default function WalletModal({ onClose, onConnect }) {
         return;
       }
 
+      // Store Circle session tokens in sessionStorage so PasswordUnlockModal
+      // can use them to create transfer challenges without re-auth.
       try {
+        sessionStorage.setItem('circle_session', JSON.stringify({
+          deviceToken,
+          deviceEncryptionKey,
+          email: currentEmail,
+          storedAt: Date.now(),
+        }));
+      } catch (_) {}
+
+      try {
+        // Pass deviceToken so confirm can fetch the real Circle wallet
         const r = await fetch('/api/wallet/confirm', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: currentEmail }),
+          body: JSON.stringify({ email: currentEmail, deviceToken, deviceEncryptionKey }),
         });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error);

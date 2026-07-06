@@ -168,78 +168,88 @@ app.get('/api/signals/:id', (req, res) => {
 });
 
 app.post('/api/unlock', async (req, res) => {
-  // Support both old {signal_id, wallet_address, tx_hash} and new {signalId, walletAddress, amount, password}
   const signal_id = req.body.signal_id || req.body.signalId;
   const wallet_address = req.body.wallet_address || req.body.walletAddress;
   const tx_hash = req.body.tx_hash;
   const message = req.body.message;
   const password = req.body.password;
+  const circleConfirmed = req.body.circleConfirmed === true;
+  const circleTransferId = req.body.circleTransferId || null;
 
-  console.log('[/api/unlock] received:', { signal_id, wallet_address: wallet_address ? wallet_address.slice(0, 10) + '…' : '(empty)', has_password: !!password, tx_hash: tx_hash || '(none)' });
+  console.log('[/api/unlock] ── INCOMING REQUEST ──');
+  console.log('[/api/unlock]   signal_id:', signal_id || '(missing)');
+  console.log('[/api/unlock]   wallet_address:', wallet_address ? wallet_address.slice(0, 10) + '…' : '(missing)');
+  console.log('[/api/unlock]   circleConfirmed:', circleConfirmed);
+  console.log('[/api/unlock]   circleTransferId:', circleTransferId || '(none)');
+  console.log('[/api/unlock]   has_password:', !!password);
+  console.log('[/api/unlock]   has_metamask_sig:', !!(message && tx_hash));
 
   if (!signal_id || !wallet_address) {
-    console.log('[/api/unlock] rejected: missing signal_id or wallet_address');
+    console.log('[/api/unlock] REJECTED: missing signal_id or wallet_address');
     return res.status(400).json({ error: 'Missing required fields: walletAddress and signalId are required' });
   }
 
   const signal = db.prepare('SELECT * FROM signals WHERE id = ?').get(signal_id);
-  if (!signal) return res.status(404).json({ error: 'Signal not found' });
+  if (!signal) {
+    console.log('[/api/unlock] REJECTED: signal not found:', signal_id);
+    return res.status(404).json({ error: 'Signal not found' });
+  }
 
   if (hasUnlocked(signal_id, wallet_address)) {
+    console.log('[/api/unlock] Already unlocked — returning cached signal');
     return res.json({ success: true, message: 'Already unlocked', signal: signalToTeaser(signal, wallet_address) });
   }
 
-  // For Circle wallets: verify spend password when provided
-  if (password) {
-    const user = db.prepare('SELECT password_hash FROM wallet_users WHERE LOWER(wallet_address) = LOWER(?)').get(wallet_address);
-    if (!user?.password_hash) {
-      return res.status(401).json({ error: 'No spend password set — please reconnect your wallet to set one' });
-    }
-    const valid = await checkPassword(password, user.password_hash);
-    if (!valid) {
-      return res.status(401).json({ error: 'Incorrect password' });
-    }
+  // ── PATH A: Circle SDK confirmed the transfer ──────────────────────────────
+  // The frontend called sdk.execute(challengeId) and Circle executed the USDC
+  // transfer. Trust it — no additional verification needed here.
+  if (circleConfirmed) {
+    console.log('[/api/unlock] PATH A: Circle-confirmed transfer. Recording unlock.');
+    const txRef = circleTransferId || `circle_exec_${Date.now()}`;
+    db.prepare('INSERT INTO unlocks (id, signal_id, wallet_address, tx_hash, amount_usdc) VALUES (?, ?, ?, ?, ?)')
+      .run(uuidv4(), signal_id, wallet_address, txRef, signal.price_usdc);
+    const fullSignal = signalToTeaser(signal, wallet_address);
+    broadcast({ type: 'signal_unlocked', signal_id, wallet_address });
+    console.log('[/api/unlock] PATH A: SUCCESS — signal unlocked, tx_ref:', txRef);
+    return res.json({ success: true, signal: fullSignal });
   }
 
-  // For MetaMask/Rabby: verify signature
+  // ── PATH B: MetaMask / Rabby signature ────────────────────────────────────
   if (message && tx_hash && !tx_hash.startsWith('circle_')) {
+    console.log('[/api/unlock] PATH B: MetaMask signature verification');
     try {
       const recovered = ethers.verifyMessage(message, tx_hash);
       if (recovered.toLowerCase() !== wallet_address.toLowerCase()) {
+        console.log('[/api/unlock] PATH B: Signature mismatch');
         return res.status(403).json({ error: 'Signature does not match wallet address' });
       }
     } catch (e) {
+      console.log('[/api/unlock] PATH B: Invalid signature:', e.message);
       return res.status(400).json({ error: 'Invalid signature' });
     }
+    const txRef = tx_hash;
+    db.prepare('INSERT INTO unlocks (id, signal_id, wallet_address, tx_hash, amount_usdc) VALUES (?, ?, ?, ?, ?)')
+      .run(uuidv4(), signal_id, wallet_address, txRef, signal.price_usdc);
+    const fullSignal = signalToTeaser(signal, wallet_address);
+    broadcast({ type: 'signal_unlocked', signal_id, wallet_address });
+    console.log('[/api/unlock] PATH B: SUCCESS — MetaMask unlock recorded');
+    return res.json({ success: true, signal: fullSignal });
   }
 
-  // For Circle wallets (no MetaMask signature): check on-chain USDC balance
-  const isCircleUnlock = !message || !tx_hash || tx_hash.startsWith('circle_') || req.body.walletAddress;
-  if (isCircleUnlock) {
-    try {
-      const balance = await getOnChainUsdcBalance(wallet_address);
-      const required = signal.price_usdc || 0.05;
-      if (balance < required) {
-        return res.status(402).json({
-          error: `Insufficient USDC balance. Need ${required.toFixed(2)} USDC, wallet has ${balance.toFixed(4)} USDC.`,
-        });
-      }
-    } catch (e) {
-      console.warn('[unlock] balance check error (proceeding):', e.message);
-    }
+  // ── PATH C: Legacy password-only Circle unlock (kept for compatibility) ────
+  // NOTE: This path does NOT verify a real Circle transfer occurred.
+  // It is intentionally blocked — Circle wallet unlocks MUST go through
+  // PATH A (sdk.execute → circleConfirmed: true).
+  if (password) {
+    console.log('[/api/unlock] PATH C: Legacy password-only — BLOCKED. Must use SDK execute flow.');
+    return res.status(400).json({
+      error: 'Circle wallet unlocks require SDK approval. Please use the Circle approval flow.',
+      code: 'SDK_REQUIRED',
+    });
   }
 
-  const txRef = tx_hash || `circle_${Date.now()}`;
-  const unlockId = uuidv4();
-  db.prepare(`
-    INSERT INTO unlocks (id, signal_id, wallet_address, tx_hash, amount_usdc)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(unlockId, signal_id, wallet_address, txRef, signal.price_usdc);
-
-  const fullSignal = signalToTeaser(signal, wallet_address);
-  broadcast({ type: 'signal_unlocked', signal_id, wallet_address });
-
-  res.json({ success: true, signal: fullSignal });
+  console.log('[/api/unlock] REJECTED: No valid unlock path matched');
+  return res.status(400).json({ error: 'Invalid unlock request — no valid payment proof provided' });
 });
 
 app.get('/api/unlocks', (req, res) => {
