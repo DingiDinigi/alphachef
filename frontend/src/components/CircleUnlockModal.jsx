@@ -31,6 +31,7 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
   const [state, setState] = useState('loading');
   const [errMsg, setErrMsg] = useState('');
   const [balance, setBalance] = useState('');
+  const [walletAddr, setWalletAddr] = useState('');
   const challengeRef = useRef({ challengeId: '', userToken: '', encryptionKey: '' });
 
   useEffect(() => {
@@ -48,8 +49,8 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
         const d = await r.json();
 
         if (!r.ok) {
-          if (d.error?.includes('Insufficient')) {
-            if (!cancelled) { setErrMsg(d.error); setState('insufficient'); }
+          if (d.error?.includes('Insufficient') || d.error?.includes('indexed')) {
+            if (!cancelled) { setErrMsg(d.error); setWalletAddr(d.walletAddress || ''); setState('insufficient'); }
           } else if (!cancelled) {
             setState('expired');
           }
@@ -153,12 +154,18 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
             <h3 style={{ fontFamily: '"Playfair Display",serif', fontSize: 20, fontWeight: 400, marginBottom: 10, color: '#ff6b6b' }}>
               Insufficient USDC
             </h3>
-            <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 22, lineHeight: 1.65 }}>
-              You need at least $0.05 USDC to unlock this signal. Get free testnet USDC from the Circle faucet.
+            <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14, lineHeight: 1.65 }}>
+              You need at least $0.05 USDC in your <strong style={{ color: 'var(--white)' }}>Circle wallet</strong>.
+              Send testnet USDC to this address from the faucet:
             </p>
+            {walletAddr && (
+              <div style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--gold)', wordBreak: 'break-all', background: 'rgba(201,162,39,.06)', border: '1px solid rgba(201,162,39,.15)', borderRadius: 8, padding: '8px 12px', marginBottom: 18 }}>
+                {walletAddr}
+              </div>
+            )}
             <a href="https://faucet.circle.com/" target="_blank" rel="noreferrer"
               style={{ display: 'block', ...BTN(true), textDecoration: 'none', marginBottom: 10 }}>
-              Get Free Test USDC →
+              Go to Circle Faucet →
             </a>
             <button onClick={onClose} style={{ ...BTN(false) }}>Cancel</button>
           </div>

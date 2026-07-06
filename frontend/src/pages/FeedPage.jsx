@@ -5,7 +5,7 @@ import Footer from '../components/Footer';
 
 const PAGE_SIZE = 9;
 
-export default function FeedPage({ wallet, signals, stats, onWalletOpen, onDisconnect, onUnlock, onOpen }) {
+export default function FeedPage({ wallet, signals, stats, balanceUsdc, onWalletOpen, onDisconnect, onUnlock, onOpen }) {
   const [visible, setVisible] = useState(PAGE_SIZE);
 
   return (

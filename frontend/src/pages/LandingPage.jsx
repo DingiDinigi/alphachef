@@ -9,7 +9,7 @@ import Stats from '../components/Stats';
 import FAQ from '../components/FAQ';
 import Footer from '../components/Footer';
 
-export default function LandingPage({ wallet, signals, stats, onWalletOpen, onDisconnect, onUnlock, onOpen }) {
+export default function LandingPage({ wallet, signals, stats, balanceUsdc, onWalletOpen, onDisconnect, onUnlock, onOpen }) {
   return (
     <div style={{ background: 'var(--bg)', minHeight: '100vh' }}>
       <Nav onWalletOpen={onWalletOpen} onDisconnect={onDisconnect} wallet={wallet} balanceUsdc={balanceUsdc} />
