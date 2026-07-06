@@ -1,6 +1,6 @@
 node_modules/
 .env
-dist/
+node_modules/dist/
 *.db
 *.sqlite
 artifacts/
