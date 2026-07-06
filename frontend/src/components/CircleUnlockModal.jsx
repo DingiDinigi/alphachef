@@ -1,6 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { W3SSdk } from '@circle-fin/w3s-pw-web-sdk';
 
 const OVERLAY = {
   position: 'fixed', inset: 0, background: 'rgba(0,0,0,.82)',
@@ -19,15 +18,43 @@ const BTN = (primary) => ({
   color: 'var(--white)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
 });
 
-const SESSION_TTL = 24 * 60 * 60 * 1000;
+const SESSION_TTL = 30 * 24 * 60 * 60 * 1000;
 
 function safeParseSession() {
   try { return JSON.parse(localStorage.getItem('circle_session') || 'null'); } catch { return null; }
 }
 
-let _sdk = null;
-function getSdk() { if (!_sdk) _sdk = new W3SSdk(); return _sdk; }
+async function tryRefreshToken() {
+  const session = safeParseSession();
+  if (!session?.refreshToken) return null;
+  try {
+    const r = await fetch('/api/wallet/refresh-token', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: session.refreshToken }),
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (!d.userToken) return null;
+    const newSession = {
+      ...session,
+      userToken: d.userToken,
+      encryptionKey: d.encryptionKey || session.encryptionKey,
+      timestamp: Date.now(),
+    };
+    if (d.refreshToken) newSession.refreshToken = d.refreshToken;
+    localStorage.setItem('circle_session', JSON.stringify(newSession));
+    return d.userToken;
+  } catch { return null; }
+}
 
+// States:
+//   loading   → checking balance
+//   ready     → balance OK, show "Confirm Unlock" button
+//   confirming → unlock POST in progress
+//   insufficient → not enough USDC
+//   expired   → both userToken and refreshToken exhausted
+//   success   → unlocked
+//   error     → unexpected failure
 export default function CircleUnlockModal({ email, signalId, appId, onSuccess, onClose, onReconnect }) {
   const navigate = useNavigate();
   const [state, setState] = useState('loading');
@@ -36,86 +63,87 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
   const [walletAddr, setWalletAddr] = useState('');
   const [retryLoading, setRetryLoading] = useState(false);
   const [retryBalance, setRetryBalance] = useState('');
-  const challengeRef = useRef({ challengeId: '', userToken: '', encryptionKey: '' });
 
-  async function tryRefreshToken(session) {
-    if (!session?.refreshToken) return null;
-    try {
-      const r = await fetch('/api/wallet/refresh-token', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken: session.refreshToken }),
-      });
-      if (!r.ok) return null;
-      const d = await r.json();
-      if (!d.userToken) return null;
-      const newSession = { ...session, userToken: d.userToken, encryptionKey: d.encryptionKey || session.encryptionKey, timestamp: Date.now() };
-      if (d.refreshToken) newSession.refreshToken = d.refreshToken;
-      localStorage.setItem('circle_session', JSON.stringify(newSession));
-      return { userToken: d.userToken, encryptionKey: newSession.encryptionKey };
-    } catch { return null; }
-  }
-
-  async function fetchPayment(userToken) {
-    const r = await fetch('/api/wallet/create-payment', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, signal_id: signalId, userToken }),
-    });
-    const d = await r.json();
-    return { ok: r.ok, data: d };
-  }
-
+  // On mount: validate session token (silently refresh if needed), then check balance
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         let session = safeParseSession();
-        let userToken = session?.userToken;
-        let encKey = session?.encryptionKey;
 
-        // Session missing or TTL-expired → try silent token refresh first
-        if (!userToken || Date.now() - (session.timestamp || 0) > SESSION_TTL) {
-          const refreshed = await tryRefreshToken(session);
+        // If token looks expired, try silent refresh before making API calls
+        if (!session?.userToken || Date.now() - (session.timestamp || 0) > SESSION_TTL) {
+          const refreshed = await tryRefreshToken();
           if (!refreshed) { if (!cancelled) setState('expired'); return; }
-          userToken = refreshed.userToken;
-          encKey = refreshed.encryptionKey;
           session = safeParseSession();
         }
 
-        let { ok, data } = await fetchPayment(userToken);
+        // Use create-payment for server-side balance check + token validation
+        const userToken = session.userToken;
+        const r = await fetch('/api/wallet/create-payment', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, signal_id: signalId, userToken }),
+        });
+        const d = await r.json();
 
-        // Auth error (not a balance issue) → try silent token refresh once, then retry
-        if (!ok && !data.error?.includes('Insufficient') && !data.error?.includes('indexed')) {
-          const refreshed = await tryRefreshToken(session);
-          if (!refreshed) { if (!cancelled) setState('expired'); return; }
-          userToken = refreshed.userToken;
-          encKey = refreshed.encryptionKey;
-          session = safeParseSession();
-          const retry = await fetchPayment(userToken);
-          ok = retry.ok;
-          data = retry.data;
-        }
-
-        if (!ok) {
-          if (data.error?.includes('Insufficient') || data.error?.includes('indexed')) {
-            if (!cancelled) { setErrMsg(data.error); setWalletAddr(data.walletAddress || ''); setState('insufficient'); }
-          } else if (!cancelled) {
-            setState('expired');
+        if (!r.ok) {
+          if (d.error?.includes('Insufficient') || d.error?.includes('indexed')) {
+            if (!cancelled) { setWalletAddr(d.walletAddress || ''); setState('insufficient'); }
+          } else {
+            // Auth error — try one silent token refresh then retry
+            const refreshed = await tryRefreshToken();
+            if (!refreshed) { if (!cancelled) setState('expired'); return; }
+            const session2 = safeParseSession();
+            const r2 = await fetch('/api/wallet/create-payment', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email, signal_id: signalId, userToken: session2.userToken }),
+            });
+            const d2 = await r2.json();
+            if (!r2.ok) {
+              if (d2.error?.includes('Insufficient') || d2.error?.includes('indexed')) {
+                if (!cancelled) { setWalletAddr(d2.walletAddress || ''); setState('insufficient'); }
+              } else if (!cancelled) {
+                setState('expired');
+              }
+              return;
+            }
+            if (!cancelled) { setBalance(d2.balance || ''); setState('ready'); }
           }
           return;
         }
 
-        if (!cancelled) {
-          challengeRef.current = { challengeId: data.challengeId, userToken, encryptionKey: encKey };
-          setBalance(data.balance || '');
-          setState('ready');
-        }
+        if (!cancelled) { setBalance(d.balance || ''); setState('ready'); }
       } catch (e) {
-        if (!cancelled) { setErrMsg(e.message || 'Failed to prepare payment'); setState('error'); }
+        if (!cancelled) { setErrMsg(e.message || 'Failed to prepare unlock'); setState('error'); }
       }
     })();
     return () => { cancelled = true; };
   }, [email, signalId]);
 
+  // Confirm unlock — no PIN required, session + balance already validated above
+  async function handleConfirm() {
+    setState('confirming');
+    try {
+      const walletAddress = localStorage.getItem('ac_wallet') || '';
+      const r = await fetch('/api/unlock', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          signal_id: signalId,
+          wallet_address: walletAddress,
+          tx_hash: `circle_${Date.now()}`,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Unlock failed');
+      setState('success');
+      setTimeout(() => { onSuccess?.(d.signal); onClose?.(); }, 1400);
+    } catch (e) {
+      setErrMsg(e.message || 'Unlock failed — please try again');
+      setState('ready');
+    }
+  }
+
+  // Retry balance check after user has funded wallet
   async function handleRetry() {
     setRetryLoading(true);
     setRetryBalance('');
@@ -126,27 +154,29 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
       setRetryBalance(d.balance || '0');
 
       if (bal >= 0.05) {
-        // Balance now sufficient — proceed to payment
+        // Balance now sufficient — re-validate session and show confirm
         setState('loading');
         const session = safeParseSession();
-        const userToken = session?.userToken;
-        const encKey = session?.encryptionKey;
-        if (!userToken) { setState('expired'); return; }
-        const { ok, data } = await fetchPayment(userToken);
-        if (!ok) {
-          if (data.error?.includes('Insufficient') || data.error?.includes('indexed')) {
-            setRetryBalance(data.balance || d.balance || '0');
-            setState('insufficient');
-          } else {
-            setState('expired');
-          }
+        let userToken = session?.userToken;
+        if (!userToken) {
+          const refreshed = await tryRefreshToken();
+          if (!refreshed) { setState('expired'); return; }
+          userToken = safeParseSession()?.userToken;
+        }
+        const r2 = await fetch('/api/wallet/create-payment', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, signal_id: signalId, userToken }),
+        });
+        const d2 = await r2.json();
+        if (!r2.ok) {
+          setRetryBalance(d2.balance || d.balance || '0');
+          setState('insufficient');
           return;
         }
-        challengeRef.current = { challengeId: data.challengeId, userToken, encryptionKey: encKey };
-        setBalance(data.balance || '');
+        setBalance(d2.balance || '');
         setState('ready');
       }
-      // else stay on insufficient — retryBalance state already shows the current amount
+      // else: stay on insufficient, retryBalance shows the current amount
     } catch (_) {
       setRetryBalance('0');
     } finally {
@@ -154,92 +184,60 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
     }
   }
 
-  function handlePin() {
-    const { challengeId, userToken, encryptionKey } = challengeRef.current;
-    const s = getSdk();
-    if (appId) s.setAppSettings({ appId });
-    s.setAuthentication({ userToken, encryptionKey });
-    setState('executing');
-
-    s.execute(challengeId, async (err) => {
-      if (err) {
-        setErrMsg(err.message || 'PIN cancelled or incorrect — try again');
-        setState('ready');
-        return;
-      }
-      try {
-        const walletAddress = localStorage.getItem('ac_wallet') || '';
-        const r = await fetch('/api/unlock', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ signal_id: signalId, wallet_address: walletAddress, tx_hash: `circle_${Date.now()}` }),
-        });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.error);
-        setState('success');
-        setTimeout(() => { onSuccess?.(d.signal); onClose?.(); }, 1400);
-      } catch (ue) {
-        setErrMsg(ue.message || 'Unlock recording failed');
-        setState('error');
-      }
-    });
-  }
-
-  const blockClose = state === 'executing';
+  const blockClose = state === 'confirming';
 
   return (
     <div onClick={blockClose ? undefined : onClose} style={OVERLAY}>
       <div onClick={e => e.stopPropagation()} style={MODAL}>
 
+        {/* ── LOADING ── */}
         {state === 'loading' && (
           <div style={{ textAlign: 'center', padding: '20px 0' }}>
             <div style={{ fontSize: 28, marginBottom: 12, color: 'var(--gold)' }}>⏳</div>
-            <h3 style={{ fontFamily: '"Playfair Display",serif', fontSize: 20, fontWeight: 400, marginBottom: 10 }}>Preparing payment…</h3>
+            <h3 style={{ fontFamily: '"Playfair Display",serif', fontSize: 20, fontWeight: 400, marginBottom: 10 }}>Preparing unlock…</h3>
             <p style={{ fontSize: 13, color: 'var(--muted)' }}>Checking your USDC balance…</p>
           </div>
         )}
 
+        {/* ── READY: confirm unlock ── */}
         {state === 'ready' && (
           <>
             <div style={{ fontSize: 28, marginBottom: 12, textAlign: 'center' }}>🔑</div>
             <h3 style={{ fontFamily: '"Playfair Display",serif', fontSize: 22, fontWeight: 400, marginBottom: 8, textAlign: 'center' }}>
-              Pay <span style={{ color: 'var(--gold)' }}>$0.05 USDC</span> to unlock
+              Unlock for <span style={{ color: 'var(--gold)' }}>$0.05 USDC</span>
             </h3>
-            <p style={{ fontSize: 13, color: 'var(--muted)', textAlign: 'center', lineHeight: 1.65, marginBottom: 8 }}>
+            <p style={{ fontSize: 13, color: 'var(--muted)', textAlign: 'center', lineHeight: 1.65, marginBottom: 20 }}>
               Your balance: <strong style={{ color: 'var(--gold)' }}>{balance} USDC</strong>
             </p>
-            <p style={{ fontSize: 12, color: 'var(--dim)', textAlign: 'center', lineHeight: 1.6, marginBottom: 22 }}>
-              Click the button below — a Circle PIN prompt will appear. Enter your 6-digit PIN to authorise the $0.05 USDC transfer.
-            </p>
             {errMsg && <p style={{ fontSize: 12, color: '#ff6b6b', marginBottom: 14, textAlign: 'center' }}>{errMsg}</p>}
-            <button onClick={handlePin} style={BTN(true)}>
-              <span>🔒</span> Enter PIN & Pay $0.05 →
+            <button onClick={handleConfirm} style={BTN(true)}>
+              <span>✓</span> Confirm Unlock →
             </button>
             <button onClick={onClose} style={{ ...BTN(false), marginTop: 10 }}>Cancel</button>
           </>
         )}
 
-        {state === 'executing' && (
+        {/* ── CONFIRMING ── */}
+        {state === 'confirming' && (
           <div style={{ textAlign: 'center', padding: '20px 0' }}>
             <div style={{ fontSize: 28, marginBottom: 12, color: 'var(--gold)' }}>🔐</div>
-            <h3 style={{ fontFamily: '"Playfair Display",serif', fontSize: 20, fontWeight: 400, marginBottom: 10 }}>Enter your 6-digit PIN</h3>
-            <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 18, lineHeight: 1.6 }}>
-              A Circle PIN dialog has appeared. Enter your 6-digit PIN to authorise the $0.05 USDC payment.
-            </p>
+            <h3 style={{ fontFamily: '"Playfair Display",serif', fontSize: 20, fontWeight: 400, marginBottom: 10 }}>Unlocking…</h3>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--dim)', fontSize: 13 }}>
               <span style={{ width: 16, height: 16, borderRadius: '50%', border: '2px solid var(--gold)', borderTopColor: 'transparent', display: 'inline-block', animation: 'spin .8s linear infinite' }} />
-              Waiting for PIN confirmation…
+              Recording your unlock…
             </div>
             <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
           </div>
         )}
 
+        {/* ── INSUFFICIENT ── */}
         {state === 'insufficient' && (
           <div style={{ textAlign: 'center', padding: '20px 0' }}>
             <div style={{ fontSize: 36, marginBottom: 12 }}>💸</div>
             <h3 style={{ fontFamily: '"Playfair Display",serif', fontSize: 20, fontWeight: 400, marginBottom: 10, color: '#ff6b6b' }}>
               Insufficient USDC
             </h3>
-            <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: retryBalance ? 6 : 14, lineHeight: 1.65 }}>
+            <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: retryBalance !== '' ? 6 : 14, lineHeight: 1.65 }}>
               You need at least $0.05 USDC on <strong style={{ color: 'var(--white)' }}>ARC testnet</strong>.
             </p>
             {retryBalance !== '' && (
@@ -267,27 +265,26 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
             >
               {retryLoading ? 'Checking balance…' : "I've funded my wallet — Try Again"}
             </button>
-            <button
-              onClick={() => { onClose?.(); navigate('/feed'); }}
-              style={{ ...BTN(false) }}
-            >
+            <button onClick={() => { onClose?.(); navigate('/feed'); }} style={{ ...BTN(false) }}>
               ← Back to Feed
             </button>
           </div>
         )}
 
+        {/* ── SESSION EXPIRED (both tokens gone) ── */}
         {state === 'expired' && (
           <div style={{ textAlign: 'center', padding: '20px 0' }}>
             <div style={{ fontSize: 28, marginBottom: 12 }}>🔐</div>
-            <h3 style={{ fontFamily: '"Playfair Display",serif', fontSize: 20, fontWeight: 400, marginBottom: 10 }}>Session expired</h3>
+            <h3 style={{ fontFamily: '"Playfair Display",serif', fontSize: 20, fontWeight: 400, marginBottom: 10 }}>Please reconnect</h3>
             <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 24, lineHeight: 1.65 }}>
-              Your Circle session has expired. Reconnect with your email to restore access.
+              Your session has fully expired. Reconnect with your email to resume — you'll land back on this unlock automatically.
             </p>
-            <button onClick={() => { onClose?.(); onReconnect?.(); }} style={BTN(true)}>Reconnect Wallet →</button>
-            <button onClick={onClose} style={{ ...BTN(false), marginTop: 10, justifyContent: 'center' }}>Cancel</button>
+            <button onClick={() => { onReconnect?.(); }} style={BTN(true)}>Reconnect Wallet →</button>
+            <button onClick={onClose} style={{ ...BTN(false), marginTop: 10 }}>Cancel</button>
           </div>
         )}
 
+        {/* ── SUCCESS ── */}
         {state === 'success' && (
           <div style={{ textAlign: 'center', padding: '20px 0' }}>
             <div style={{ fontSize: 40, marginBottom: 12, color: 'var(--gold)' }}>✓</div>
@@ -296,9 +293,10 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
           </div>
         )}
 
+        {/* ── ERROR ── */}
         {state === 'error' && (
           <div style={{ textAlign: 'center', padding: '20px 0' }}>
-            <h3 style={{ fontFamily: '"Playfair Display",serif', fontSize: 20, fontWeight: 400, marginBottom: 10, color: '#ff6b6b' }}>Payment failed</h3>
+            <h3 style={{ fontFamily: '"Playfair Display",serif', fontSize: 20, fontWeight: 400, marginBottom: 10, color: '#ff6b6b' }}>Unlock failed</h3>
             <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 20, lineHeight: 1.6 }}>{errMsg}</p>
             <button onClick={onClose} style={BTN(false)}>Close</button>
           </div>
