@@ -39,27 +39,18 @@ export default function PasswordUnlockModal({ email, signal, onSuccess, onClose 
 
     const walletAddress = localStorage.getItem('ac_wallet') || '';
 
-    try {
-      // Verify spend password
-      const pr = await fetch('/api/wallet/verify-password', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      const pd = await pr.json();
-      if (!pr.ok) {
-        setErrMsg(pd.error || 'Incorrect password');
-        setState('password');
-        return;
-      }
+    const unlockBody = {
+      walletAddress,
+      signalId: signal.id,
+      amount: signal.price_usdc || 0.05,
+      password,
+    };
+    console.log('[PasswordUnlockModal] POST /api/unlock body:', unlockBody);
 
-      // Backend checks balance and records unlock
+    try {
       const ur = await fetch('/api/unlock', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          walletAddress,
-          signalId: signal.id,
-          amount: signal.price_usdc || 0.05,
-        }),
+        body: JSON.stringify(unlockBody),
       });
       const ud = await ur.json();
 

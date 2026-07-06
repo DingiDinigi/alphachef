@@ -7,6 +7,7 @@ const Database = require('better-sqlite3');
 const { v4: uuidv4 } = require('uuid');
 const { ethers } = require('ethers');
 const path = require('path');
+const crypto = require('crypto');
 const { CircleUserControlledWalletsClient } = require('@circle-fin/user-controlled-wallets');
 
 const app = express();
@@ -60,12 +61,25 @@ db.exec(`
   );
 `);
 
+// Ensure password_hash column exists (wallet-server.js owns wallet_users schema)
+try { db.exec('ALTER TABLE wallet_users ADD COLUMN password_hash TEXT'); } catch (_) {}
+
 // Circle UCW client
 const circleClient = process.env.CIRCLE_API_KEY
   ? new CircleUserControlledWalletsClient({ apiKey: process.env.CIRCLE_API_KEY })
   : null;
 
 const AGENT_SECRET = process.env.AGENT_SECRET || 'alphachef-agent-secret-2024';
+
+async function checkPassword(password, stored) {
+  const [salt, hash] = stored.split(':');
+  const derived = await new Promise((resolve, reject) => {
+    crypto.pbkdf2(password, salt, 100000, 64, 'sha512', (err, dk) => {
+      if (err) reject(err); else resolve(dk.toString('hex'));
+    });
+  });
+  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(derived, 'hex'));
+}
 
 const USDC_ARC = '0x3600000000000000000000000000000000000000';
 async function getOnChainUsdcBalance(walletAddress) {
@@ -154,14 +168,18 @@ app.get('/api/signals/:id', (req, res) => {
 });
 
 app.post('/api/unlock', async (req, res) => {
-  // Support both old {signal_id, wallet_address, tx_hash} and new {signalId, walletAddress, amount}
+  // Support both old {signal_id, wallet_address, tx_hash} and new {signalId, walletAddress, amount, password}
   const signal_id = req.body.signal_id || req.body.signalId;
   const wallet_address = req.body.wallet_address || req.body.walletAddress;
   const tx_hash = req.body.tx_hash;
   const message = req.body.message;
+  const password = req.body.password;
+
+  console.log('[/api/unlock] received:', { signal_id, wallet_address: wallet_address ? wallet_address.slice(0, 10) + '…' : '(empty)', has_password: !!password, tx_hash: tx_hash || '(none)' });
 
   if (!signal_id || !wallet_address) {
-    return res.status(400).json({ error: 'Missing required fields' });
+    console.log('[/api/unlock] rejected: missing signal_id or wallet_address');
+    return res.status(400).json({ error: 'Missing required fields: walletAddress and signalId are required' });
   }
 
   const signal = db.prepare('SELECT * FROM signals WHERE id = ?').get(signal_id);
@@ -169,6 +187,18 @@ app.post('/api/unlock', async (req, res) => {
 
   if (hasUnlocked(signal_id, wallet_address)) {
     return res.json({ success: true, message: 'Already unlocked', signal: signalToTeaser(signal, wallet_address) });
+  }
+
+  // For Circle wallets: verify spend password when provided
+  if (password) {
+    const user = db.prepare('SELECT password_hash FROM wallet_users WHERE LOWER(wallet_address) = LOWER(?)').get(wallet_address);
+    if (!user?.password_hash) {
+      return res.status(401).json({ error: 'No spend password set — please reconnect your wallet to set one' });
+    }
+    const valid = await checkPassword(password, user.password_hash);
+    if (!valid) {
+      return res.status(401).json({ error: 'Incorrect password' });
+    }
   }
 
   // For MetaMask/Rabby: verify signature
