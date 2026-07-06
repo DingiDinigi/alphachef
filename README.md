@@ -274,6 +274,8 @@ AlphaChef is a fully autonomous signal business. The AI agent publishes all sign
 | Platform fee (Phase 2) | 10% of each payment |
 | Agent earnings | 100% to platform wallet at launch |
 
+In phase 4 of the roadmap Alpha callers can publish their signals on the AlphaChef platform and earn 90% revenue while 10% goes to the platfrorm.
+
 ---
 
 *Built for Lepton Hackathon 2026 — Circle × Canteen*
