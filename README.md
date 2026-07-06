@@ -1,64 +1,66 @@
-# AlphaChef 👨‍🍳
+# AlphaChef
 
 > **Built for Lepton Hackathon — Circle × Canteen**
 
-**The autonomous on-chain alpha signal platform where AI chefs cook signals 24/7 and you pay $0.01 USDC to eat.**
+**The autonomous on-chain alpha signal platform where AI chefs cook signals 24/7 and you pay USDC to eat.**
 
 [![Live](https://img.shields.io/badge/LIVE-alphachef.site-c9a227?style=for-the-badge)](https://alphachef.site)
-[![Arc Testnet](https://img.shields.io/badge/Arc-Testnet-4ade80?style=for-the-badge)](https://rpc.testnet.arc.fun)
-[![Circle x402](https://img.shields.io/badge/Circle-x402-blue?style=for-the-badge)](https://developers.circle.com)
+[![Circle UCW](https://img.shields.io/badge/Circle-UCW-blue?style=for-the-badge)](https://developers.circle.com)
+[![ETH Sepolia](https://img.shields.io/badge/Network-ETH--SEPOLIA-627eea?style=for-the-badge)](https://sepolia.etherscan.io)
 [![GitHub](https://img.shields.io/badge/GitHub-DingiDinigi%2Falphachef-white?style=for-the-badge&logo=github)](https://github.com/DingiDinigi/alphachef)
 
 ---
 
-## 🔴 Live Demo
+## Live Demo
 
 **[https://alphachef.site](https://alphachef.site)**
 
-Visit the live app. Signals are already cooking. Connect your wallet and pay $0.01 USDC to unlock full analysis.
+Signals are already cooking. Connect your Circle wallet with email OTP, get test USDC from the Circle faucet, and pay to unlock full analysis.
 
 ---
 
 ## Why AlphaChef Wins
 
-| Criteria | ✅ AlphaChef |
+| Criteria | AlphaChef |
 |----------|-------------|
-| **Circle x402 nanopayments** | $0.01–$0.05 USDC per signal via x402 on Arc |
-| **Arc testnet deployment** | Smart contract live on Arc (Chain ID: 5042002) |
+| **Circle UCW nanopayments** | Real USDC transfers via Circle User Controlled Wallets — SDK approval required |
+| **Circle email OTP onboarding** | Email → Circle wallet in seconds, no seed phrase |
+| **Correct transfer approval flow** | `sdk.execute(challengeId)` → user approves in Circle iframe → transfer executes |
 | **Real-time on-chain data** | 8 autonomous signal sources, 5-min loop |
-| **Circle wallet onboarding** | Google/Email → Arc wallet in 10 seconds |
-| **Actual working demo** | Pay → unlock → on-chain proof in < 2s |
-| **Business model** | 10% platform fee, signals priced by confidence |
 | **Autonomous AI agent** | Groq LLM writes plain-English analysis 24/7 |
-| **Production design** | Full dark theme, animated globe, wavy cards |
+| **Actual working demo** | Pay → approve in Circle → unlock in < 5s |
+| **Business model** | Signals priced $0.01–$0.05 USDC by confidence |
+| **Production design** | Premium dark theme, animated 3D globe, gold glow effects |
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        alphachef.site                           │
-└─────────────────────────────────────────────────────────────────┘
-         │                    │                    │
-         ▼                    ▼                    ▼
-┌──────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Frontend   │    │     Backend      │    │  Autonomous     │
-│  React+Vite  │◄──►│  Express+SQLite  │◄───│     Agent       │
-│   Port 5173  │    │   Port 3011      │    │   node-cron     │
-│              │    │   WebSocket      │    │   Groq AI       │
-└──────────────┘    └──────────────────┘    └────────┬────────┘
-         │                    │                      │
-         ▼                    ▼                      ▼
-┌──────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│ Circle x402  │    │   AlphaChef.sol  │    │  8 Signal       │
-│ Nanopayments │    │   Arc Testnet    │    │  Sources        │
-│ USDC unlock  │    │   Chain 5042002  │    │  Smart Money    │
-└──────────────┘    └──────────────────┘    │  Bridge Flows   │
-                                            │  Funding Rates  │
-                                            │  Social/GitHub  │
-                                            └─────────────────┘
+                        alphachef.site (nginx)
+                               │
+          ┌────────────────────┼────────────────────┐
+          ▼                    ▼                    ▼
+  ┌──────────────┐   ┌──────────────────┐   ┌─────────────────┐
+  │   Frontend   │   │  wallet-server   │   │  main backend   │
+  │  React+Vite  │   │   port 3015      │   │   port 3012     │
+  │  (dist/)     │   │  /api/wallet/*   │   │  /api/*  /ws    │
+  └──────────────┘   └──────────────────┘   └─────────────────┘
+          │                    │                    │
+          └────────────────────┴────────────────────┘
+                               │
+                    ┌──────────────────┐
+                    │   SQLite DB      │
+                    │ alphachef.db     │
+                    │ (shared by both) │
+                    └──────────────────┘
 ```
+
+**nginx routing** (`nginx.conf`):
+- `/api/wallet` → `localhost:3015` (wallet microservice — longer prefix wins)
+- `/api` → `localhost:3012` (main backend)
+- `/ws` → `localhost:3011` (WebSocket)
+- `/` → `frontend/dist` (static files)
 
 ---
 
@@ -67,37 +69,59 @@ Visit the live app. Signals are already cooking. Connect your wallet and pay $0.
 | Layer | Technology |
 |-------|-----------|
 | Frontend | React 19, Vite, TailwindCSS |
-| Animations | Canvas 2D (wireframe globe + wavy lines) |
-| Backend | Node.js, Express, SQLite, WebSocket |
+| Animations | Canvas 2D (3D wireframe globe with depth shading + gold glow) |
+| Backend | Node.js, Express, SQLite (better-sqlite3), WebSocket |
+| Wallet server | Node.js, Express — Circle UCW SDK server-side |
 | Agent | Node.js cron, Groq SDK (llama-3.3-70b) |
-| Smart Contract | Solidity 0.8.24, Hardhat, Arc testnet |
-| Payments | Circle x402 nanopayments, USDC |
-| Chain | Arc Testnet (Chain ID: 5042002) |
+| Payments | Circle User Controlled Wallets (UCW), USDC on ETH-SEPOLIA |
 | Fonts | Playfair Display + Inter + JetBrains Mono |
+| Process manager | PM2 |
+| Reverse proxy | nginx |
 
 ---
 
-## Smart Contract
+## Circle Wallet Flow
 
-**AlphaChef.sol** — deployed on Arc Testnet
-
+### Connect (new user)
 ```
-Contract: CONTRACT_ADDRESS_HERE
-Network: Arc Testnet
-Chain ID: 5042002
-RPC: https://rpc.testnet.arc.fun
-Explorer: https://explorer.testnet.arc.fun
+1. User enters email in WalletModal
+2. Backend (wallet-server) calls createDeviceTokenForEmailLogin
+   → returns deviceToken + deviceEncryptionKey
+3. Frontend stores {deviceToken, deviceEncryptionKey} in sessionStorage (23h window)
+4. SDK shows Circle OTP iframe — user enters code from email
+5. On success: backend calls listWallets → stores real circle_wallet_id + wallet_address in DB
+6. User sees wallet connected in nav
 ```
 
-**Key Functions:**
-- `registerSignal(signalId, priceUsdc)` — agent registers new signal
-- `unlockSignal(signalId)` — reader pays USDC, access recorded on-chain
-- `platformFee` — 10% of each payment to platform wallet
+### Unlock a signal (paying with USDC)
+```
+1. User clicks "Unlock Signal" — PasswordUnlockModal opens
+2. User enters spend password
+   — frontend reads {deviceToken, deviceEncryptionKey} from sessionStorage
+3. POST /api/wallet/prepare-unlock:
+   - Verifies spend password against pbkdf2 hash in DB
+   - Calls Circle createUserTransactionTransferChallenge → gets challengeId
+4. Frontend calls sdk.execute(challengeId)
+   → Circle shows transfer approval iframe to user
+5. User approves the USDC transfer in Circle
+6. SDK callback fires with result
+7. POST /api/unlock with {circleConfirmed: true, circleTransferId}
+8. Backend records unlock in DB → returns full signal
+```
 
-**On-Chain Verification:**
-- Signal registry: `signalRegistry[id]` → price, totalUnlocks, totalRevenue
-- Payment history: `hasUnlocked[signalId][address]` → bool
-- Events: `SignalRegistered`, `SignalUnlocked`
+This is the only path that executes a real USDC transfer. The Circle SDK iframe is mandatory.
+
+---
+
+## Signal Unlock Paths
+
+`/api/unlock` supports three paths:
+
+| Path | Trigger | How |
+|------|---------|-----|
+| **A (primary)** | Circle UCW | `circleConfirmed: true` after `sdk.execute()` |
+| **B** | MetaMask/Rabby | `message` + `tx_hash` signature verification |
+| **C (blocked)** | Password-only | Returns 400 `SDK_REQUIRED` — Circle transfers require SDK approval |
 
 ---
 
@@ -107,10 +131,10 @@ The agent runs every 5 minutes and monitors:
 
 | # | Source | What It Detects |
 |---|--------|-----------------|
-| 1 | Smart Money Wallets | Known whale address movements via Arc RPC |
+| 1 | Smart Money Wallets | Known whale address movements |
 | 2 | Token Accumulation | DEX buy pressure anomalies (>80% buy ratio) |
 | 3 | Liquidity Events | New pools with >$100K initial liquidity |
-| 4 | Bridge Activity | Large USDC bridging into Arc |
+| 4 | Bridge Activity | Large USDC bridging |
 | 5 | Funding Rate Anomalies | Extreme perp funding (>5% annualized) |
 | 6 | Social Momentum | X/Twitter keyword spike detection |
 | 7 | GitHub Activity | Dormant repos with sudden commit bursts |
@@ -124,106 +148,132 @@ The agent runs every 5 minutes and monitors:
 
 ---
 
-## Agent Activity Log
+## API Reference
 
-```
-[INFO] ⚡ Agent connected to Arc testnet
-[INFO] 👨‍🍳 AlphaChef agent loop starting...
-[INFO] Found 5 raw signals
-[INFO] Publishing HIGH signal from 3 sources — $0.05 USDC
-[INFO] ✅ Published signal: EIGEN — Smart Money + Accumulation + GitHub Converge [HIGH] $0.05 USDC
-[INFO] Signal registered on-chain: 0x4f8a...
-```
+### Main backend (`/api/*` → port 3012)
 
----
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/signals` | GET | All signals (teaser only unless `?wallet=0x...`) |
+| `/api/signals/:id` | GET | Full signal if `?wallet=0x...` has unlocked |
+| `/api/unlock` | POST | Record unlock after Circle SDK approval |
+| `/api/stats` | GET | Platform statistics (signals, unlocks, revenue) |
+| `/api/logs` | POST | Agent log ingestion (agent-secret required) |
 
-## Payment Flow
+WebSocket: `ws://alphachef.site/ws` — real-time push on `new_signal` and `signal_unlocked` events.
 
-```
-1. Reader visits alphachef.site
-2. Sees signal card with title + teaser (locked)
-3. Clicks "Unlock Signal — $0.05"
-4. Wallet modal opens (Google / Email / MetaMask)
-5. Circle x402 payment: USDC transfer approved
-6. Backend verifies tx on Arc testnet
-7. Full analysis unlocks + detail page opens
-8. On-chain proof displayed (tx hash, block, timing)
-```
+### Wallet microservice (`/api/wallet/*` → port 3015)
 
----
-
-## Business Model
-
-AlphaChef is a fully autonomous signal business. The AI agent publishes all signals. All USDC payments go directly to the platform wallet. No employees, no overhead.
-
-| Revenue Stream | Rate |
-|---------------|------|
-| Signal unlock fees | $0.01–$0.05 USDC per signal |
-| Platform fee | 10% of each payment (Phase 4+) |
-| Agent earnings | 100% to platform wallet (agent is the only publisher at launch) |
-
-**Built on Arc (Circle's L1)** — every signal unlock is a real USDC transaction contributing to Arc's economic activity.
-
-**Unit Economics (at launch):**
-- 50 daily readers × avg 3 signals/day × $0.03 avg = $4.50/day
-- 100% goes to platform wallet → $1,642/year with zero ongoing costs
-
-**Phase 4 — Signal Marketplace:**
-When the Signal Marketplace launches, human analysts can publish alongside the agent and earn 90% per signal while AlphaChef keeps 10% as platform fee.
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/wallet/init-otp` | POST | Start email OTP — returns deviceToken + deviceEncryptionKey |
+| `/api/wallet/confirm-otp` | POST | After OTP: store wallet_address + circle_wallet_id |
+| `/api/wallet/set-password` | POST | Set spend password (stored as pbkdf2 hash) |
+| `/api/wallet/prepare-unlock` | POST | Verify password + create Circle transfer challenge → challengeId |
 
 ---
 
 ## Setup
 
+### Prerequisites
+
+- Node.js 18+
+- PM2: `npm install -g pm2`
+- nginx
+- Circle developer account + API key
+
+### Environment
+
 ```bash
-# Clone
-git clone https://github.com/DingiDinigi/alphachef.git
-cd alphachef
-
-# Environment
 cp .env.example .env
-# Fill in: GROQ_API_KEY, PRIVATE_KEY, PLATFORM_WALLET
-
-# Install all
-npm run install:all
-
-# Deploy contract (optional)
-cd contracts && npx hardhat run scripts/deploy.js --network arc
-# Copy CONTRACT_ADDRESS to .env
-
-# Start everything
-npm run dev
 ```
 
-**Ports:**
-- Frontend: http://localhost:5173
-- Backend: http://localhost:3011
+Required variables:
+
+```env
+CIRCLE_API_KEY=...
+CIRCLE_APP_ID=...              # from Circle developer console
+GROQ_API_KEY=...
+PLATFORM_WALLET=0x...          # receives USDC from signal unlocks
+USDC_TOKEN_ADDRESS=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238  # ETH-SEPOLIA USDC
+AGENT_SECRET=your-secret-here
+ARC_RPC_URL=...                # optional: for on-chain balance checks
+```
+
+Also set in `frontend/.env`:
+
+```env
+VITE_CIRCLE_APP_ID=...
+```
+
+### Install & build
+
+```bash
+npm run install:all
+cd frontend && npm run build
+```
+
+### Start services with PM2
+
+```bash
+# Wallet microservice on port 3015
+pm2 start backend/wallet-server.js --name alphachef-wallet
+
+# Main backend on port 3012
+PORT=3012 pm2 start backend/server.js --name alphachef-backend
+
+pm2 save && pm2 startup
+```
+
+### nginx
+
+```bash
+sudo cp nginx.conf /etc/nginx/sites-available/alphachef
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### Rebuild frontend (after source changes)
+
+```bash
+cd frontend && npm run build
+sudo systemctl reload nginx
+```
 
 ---
 
-## Wallet Connection
+## PM2 Processes
 
-Three options built into the modal:
-1. **Continue with Google** — Circle creates Arc wallet automatically
-2. **Continue with Email** — Circle creates Arc wallet automatically
-3. **Connect Existing Wallet** — MetaMask, WalletConnect, or any EVM wallet
-
-Returning users reconnect with same email → same wallet.
+| Name | File | Port |
+|------|------|------|
+| `alphachef-wallet` | `backend/wallet-server.js` | 3015 |
+| `alphachef-backend` | `backend/server.js` | 3012 |
 
 ---
 
-## API Reference
+## Database
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/signals` | GET | All signals (teaser only) |
-| `/api/signals?wallet=0x...` | GET | With unlock status |
-| `/api/signals/:id` | GET | Full signal if unlocked |
-| `/api/unlock` | POST | Verify payment, unlock signal |
-| `/api/stats` | GET | Platform statistics |
+Single SQLite file at `backend/alphachef.db`, shared by both servers.
 
-WebSocket: `ws://localhost:3011` — real-time signal push
+| Table | Purpose |
+|-------|---------|
+| `signals` | Published alpha signals |
+| `unlocks` | Payment records (wallet → signal, tx_hash) |
+| `wallet_users` | Circle user accounts (email, circle_user_id, wallet_address, password_hash) |
+| `agent_logs` | Agent activity log |
 
 ---
 
-*Built with ❤️ for Lepton Hackathon 2026 — Circle × Canteen*
+## Business Model
+
+AlphaChef is a fully autonomous signal business. The AI agent publishes all signals. All USDC payments go to the platform wallet.
+
+| Revenue Stream | Rate |
+|---------------|------|
+| Signal unlock fees | $0.01–$0.05 USDC per signal |
+| Platform fee (Phase 2) | 10% of each payment |
+| Agent earnings | 100% to platform wallet at launch |
+
+---
+
+*Built for Lepton Hackathon 2026 — Circle × Canteen*
