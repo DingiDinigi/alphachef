@@ -198,34 +198,27 @@ app.post('/api/wallet/finalize', async (req, res) => {
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────
-const USDC_SEPOLIA = '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238';
-const SEPOLIA_RPC  = 'https://ethereum-sepolia-rpc.publicnode.com';
+// USDC on ARC testnet (chain 5042002) — 6 decimals, symbol USDC
+const USDC_ARC = '0x3600000000000000000000000000000000000000';
 
 async function getOnChainUsdcBalance(walletAddress) {
+  const rpc = process.env.ARC_RPC_URL;
+  if (!rpc) throw new Error('ARC_RPC_URL not configured in .env');
   const calldata = '0x70a08231' + walletAddress.slice(2).toLowerCase().padStart(64, '0');
-  const resp = await fetch(SEPOLIA_RPC, {
+  const resp = await fetch(rpc, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_call', params: [{ to: USDC_SEPOLIA, data: calldata }, 'latest'], id: 1 }),
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_call', params: [{ to: USDC_ARC, data: calldata }, 'latest'], id: 1 }),
   });
   const json = await resp.json();
   const hex = json.result || '0x0';
   return (Number(BigInt(hex)) / 1e6); // USDC has 6 decimals
 }
 
-async function getCircleUsdcEntry(walletId) {
-  const resp = await fetch(`https://api.circle.com/v1/w3s/wallets/${walletId}/balances`, {
-    headers: { 'Authorization': `Bearer ${apiKey}` },
-  });
-  const json = await resp.json();
-  return (json.data?.tokenBalances || []).find(b =>
-    b.token?.symbol === 'USDC' || b.token?.name?.toLowerCase().includes('usd coin')
-  ) || null;
-}
-
 // ── POST /api/wallet/create-payment ───────────────────────────────────────
-// Checks on-chain USDC balance first (authoritative), then creates a Circle
-// transfer challenge. User must PIN-confirm via SDK to execute the payment.
+// Checks ARC testnet USDC balance, then creates a Circle signMessage challenge.
+// User PIN-confirms via SDK (no on-chain transfer — Circle wallet is ETH-SEPOLIA
+// but USDC lives on ARC testnet, so PIN verification is the payment gate).
 app.post('/api/wallet/create-payment', async (req, res) => {
   if (!circleClient) return res.status(503).json({ error: 'Circle not configured' });
   const { email, signal_id, userToken } = req.body;
@@ -235,66 +228,46 @@ app.post('/api/wallet/create-payment', async (req, res) => {
   const user = db.prepare('SELECT * FROM wallet_users WHERE email = ?').get(email);
   if (!user?.circle_wallet_id) return res.status(404).json({ error: 'No Circle wallet found for this email' });
 
-  const platformWallet = process.env.PLATFORM_WALLET;
-  if (!platformWallet) return res.status(503).json({ error: 'Platform wallet not configured' });
-
   const price = 0.05;
   console.log(`[create-payment] email=${email} walletId=${user.circle_wallet_id} signal=${signal_id}`);
 
   try {
-    // 1. Check on-chain balance — authoritative source of truth
+    // 1. Check on-chain balance on ARC testnet — authoritative source of truth
     const onChainBalance = await getOnChainUsdcBalance(user.wallet_address);
-    console.log(`[create-payment] on-chain USDC balance=${onChainBalance}`);
+    console.log(`[create-payment] ARC testnet USDC balance=${onChainBalance}`);
 
     if (onChainBalance < price) {
       return res.status(400).json({
-        error: `Insufficient USDC balance — your Circle wallet (${user.wallet_address}) has ${onChainBalance.toFixed(2)} USDC. Send testnet USDC to that address from the Circle faucet.`,
+        error: `Insufficient USDC — your wallet has ${onChainBalance.toFixed(2)} USDC on ARC testnet. You need at least ${price} USDC. Fund your wallet using the faucet.`,
         balance: String(onChainBalance),
         walletAddress: user.wallet_address,
         required: String(price),
       });
     }
 
-    // 2. Get Circle-tracked USDC tokenId (needed for the transfer API)
-    const circleUsdc = await getCircleUsdcEntry(user.circle_wallet_id);
-    if (!circleUsdc) {
-      // On-chain balance exists but Circle hasn't indexed it yet
-      return res.status(400).json({
-        error: 'Circle has not indexed your USDC yet — please wait 1-2 minutes after receiving funds, then try again.',
-        balance: String(onChainBalance),
-        walletAddress: user.wallet_address,
-      });
-    }
-
-    const tokenId = circleUsdc.token.id;
-    console.log(`[create-payment] tokenId=${tokenId} balance=${circleUsdc.amount}`);
-
-    // 3. Create transfer challenge — user PIN-confirms it via SDK
-    const transferResp = await fetch('https://api.circle.com/v1/w3s/user/transactions/transfer', {
+    // 2. Create signMessage challenge — user must enter PIN to authorise the signal unlock
+    const signResp = await fetch('https://api.circle.com/v1/w3s/user/signMessage', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         idempotencyKey: uuidv4(),
         walletId: user.circle_wallet_id,
-        tokenId,
-        destinationAddress: platformWallet,
-        amounts: [String(price)],
-        feeLevel: 'LOW',
+        message: `AlphaChef unlock signal ${signal_id} | 0.05 USDC | ${Date.now()}`,
         userToken,
       }),
     });
 
-    const transferData = await transferResp.json();
-    console.log('[create-payment] Circle transfer response:', JSON.stringify(transferData));
+    const signData = await signResp.json();
+    console.log('[create-payment] Circle signMessage response:', JSON.stringify(signData));
 
-    if (!transferResp.ok) {
-      return res.status(400).json({ error: transferData.message || JSON.stringify(transferData) });
+    if (!signResp.ok) {
+      return res.status(400).json({ error: signData.message || JSON.stringify(signData) });
     }
 
-    const challengeId = transferData.data?.challengeId;
-    if (!challengeId) throw new Error('Circle did not return a challengeId for the transfer');
+    const challengeId = signData.data?.challengeId;
+    if (!challengeId) throw new Error('Circle did not return a challengeId for signMessage');
 
-    res.json({ challengeId, balance: circleUsdc.amount });
+    res.json({ challengeId, balance: onChainBalance.toFixed(2) });
   } catch (e) {
     console.error('[create-payment] error:', e);
     res.status(500).json({ error: circleErr(e) });
@@ -302,8 +275,8 @@ app.post('/api/wallet/create-payment', async (req, res) => {
 });
 
 // ── GET /api/wallet/balance ────────────────────────────────────────────────
-// Queries on-chain USDC balance directly from ETH-SEPOLIA. Returns both the
-// raw amount and the wallet address so the UI can show where to send funds.
+// Queries on-chain USDC balance from ARC testnet (chain 5042002).
+// Returns amount and wallet address so the UI can show where to send funds.
 app.get('/api/wallet/balance', async (req, res) => {
   const { email } = req.query;
   if (!email) return res.json({ balance: '0' });

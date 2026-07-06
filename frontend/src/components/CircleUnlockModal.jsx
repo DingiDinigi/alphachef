@@ -155,8 +155,8 @@ export default function CircleUnlockModal({ email, signalId, appId, onSuccess, o
               Insufficient USDC
             </h3>
             <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 14, lineHeight: 1.65 }}>
-              You need at least $0.05 USDC in your <strong style={{ color: 'var(--white)' }}>Circle wallet</strong>.
-              Send testnet USDC to this address from the faucet:
+              You need at least $0.05 USDC on <strong style={{ color: 'var(--white)' }}>ARC testnet</strong>.
+              Send testnet USDC to this address:
             </p>
             {walletAddr && (
               <div style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--gold)', wordBreak: 'break-all', background: 'rgba(201,162,39,.06)', border: '1px solid rgba(201,162,39,.15)', borderRadius: 8, padding: '8px 12px', marginBottom: 18 }}>
