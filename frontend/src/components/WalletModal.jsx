@@ -38,93 +38,54 @@ const LABEL = {
   textTransform: 'uppercase', color: 'var(--dim)', marginBottom: 14,
 };
 
-// 30 days — matching industry standard; users should never re-enter email within this window
-const SESSION_TTL = 30 * 24 * 60 * 60 * 1000;
-
 const CIRCLE_APP_ID = import.meta.env.VITE_CIRCLE_APP_ID || '';
 
-let _sdk = null;
-let _loginCallback = null;
-let _deviceIdPromise = null;
-
-function getSdk() {
-  if (!_sdk) {
-    _sdk = new W3SSdk(
-      { appSettings: { appId: CIRCLE_APP_ID } },
-      (error, result) => _loginCallback?.(error, result),
-    );
-    _deviceIdPromise = _sdk.getDeviceId();
-    _deviceIdPromise.then(
-      (id) => console.log('[W3SSdk] deviceId:', id),
-      (err) => console.warn('[W3SSdk] getDeviceId error:', err),
-    );
-  }
-  return _sdk;
-}
-
-function safeParseSession() {
-  try { return JSON.parse(localStorage.getItem('circle_session') || 'null'); } catch { return null; }
-}
-
-// Views:
-//   main → email → sent → otp-running
-//     (returning)  → success
-//     (new user)   → setup-pin → pin-running → success
-//   err (any step)
+// Views: main → email → sent → otp-running → set-password → success → err
 export default function WalletModal({ onClose, onConnect }) {
   const [view, setView] = useState('main');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errMsg, setErrMsg] = useState('');
   const [walletAddr, setWalletAddr] = useState('');
-  const [isReturning, setIsReturning] = useState(false);
-  const sessionRef = useRef({}); // OTP session data (deviceToken, etc.)
-  const pinSetupRef = useRef({}); // New-user PIN setup data (challengeId, userToken, encKey)
+  const sdkRef = useRef(null);
+  const callbackRef = useRef(null);
+  const sessionRef = useRef({});
+
+  // Create a fresh SDK instance for every OTP flow.
+  // The constructor receives a stable closure that delegates to callbackRef,
+  // so we can swap the real handler later without recreating the SDK.
+  function createFreshSdk() {
+    sdkRef.current = new W3SSdk(
+      { appSettings: { appId: CIRCLE_APP_ID } },
+      (error, result) => callbackRef.current?.(error, result),
+    );
+    return sdkRef.current;
+  }
 
   async function submitEmail(e) {
-    e.preventDefault();
+    if (e) e.preventDefault();
     if (!email.trim()) return;
     setLoading(true); setErrMsg('');
     try {
       const trimEmail = email.trim();
 
-      // Check if returning user (wallet already exists in DB)
-      const checkR = await fetch('/api/wallet/init', {
+      // Fresh SDK for every OTP flow — avoids expired session from previous attempt
+      const sdk = createFreshSdk();
+      const deviceId = await sdk.getDeviceId();
+
+      const r = await fetch('/api/wallet/init', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: trimEmail }),
+        body: JSON.stringify({ email: trimEmail, deviceId }),
       });
-      const checkD = await checkR.json();
-
-      if (checkD.isReturning) {
-        const stored = safeParseSession();
-        // Valid session within 30 days → auto-connect without OTP
-        if (stored?.userToken && Date.now() - (stored.timestamp || 0) < SESSION_TTL) {
-          setWalletAddr(checkD.walletAddress);
-          setView('success');
-          onConnect?.(checkD.walletAddress, trimEmail, 'circle');
-          return;
-        }
-        setIsReturning(true);
-      } else {
-        setIsReturning(false);
-      }
-
-      // Need OTP — get deviceId from SDK, then request OTP email
-      getSdk();
-      const sdkDeviceId = await _deviceIdPromise;
-
-      const otpR = await fetch('/api/wallet/init', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: trimEmail, deviceId: sdkDeviceId, forceOtp: checkD.isReturning }),
-      });
-      const otpD = await otpR.json();
-      if (!otpR.ok) throw new Error(otpD.error);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error);
 
       sessionRef.current = {
-        deviceToken: otpD.deviceToken,
-        deviceEncryptionKey: otpD.deviceEncryptionKey,
-        otpToken: otpD.challengeId,
-        walletAddress: otpD.walletAddress || checkD.walletAddress || null,
+        deviceToken: d.deviceToken,
+        deviceEncryptionKey: d.deviceEncryptionKey,
+        otpToken: d.challengeId,
       };
       setView('sent');
     } catch (err) {
@@ -136,55 +97,45 @@ export default function WalletModal({ onClose, onConnect }) {
 
   function startOtpVerification() {
     const { deviceToken, deviceEncryptionKey, otpToken } = sessionRef.current;
-    const s = getSdk();
     const currentEmail = email.trim();
 
-    _loginCallback = async (error, result) => {
-      _loginCallback = null;
-      if (error) {
-        setErrMsg(error.message || 'OTP verification failed');
-        setView('err');
-        return;
-      }
-      const userToken = result?.userToken;
-      const encryptionKey = result?.encryptionKey;
-      const refreshToken = result?.refreshToken || null;
-      if (!userToken) {
-        setErrMsg('Circle did not return a userToken — please try again');
-        setView('err');
-        return;
-      }
-      try {
-        const confirmR = await fetch('/api/wallet/confirm', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: currentEmail, userToken }),
-        });
-        const confirmD = await confirmR.json();
-        if (!confirmR.ok) throw new Error(confirmD.error);
+    // Reuse the SDK instance created in submitEmail (same device session)
+    const s = sdkRef.current;
+    if (!s) { setErrMsg('Session lost — please try again'); setView('email'); return; }
 
-        if (confirmD.isExisting) {
-          // Returning user — wallet already exists, session restored
-          const walletAddress = sessionRef.current.walletAddress;
-          localStorage.setItem('circle_session', JSON.stringify({
-            userToken, encryptionKey, refreshToken, walletAddress, email: currentEmail, timestamp: Date.now(),
-          }));
-          setWalletAddr(walletAddress);
-          setView('success');
-          onConnect?.(walletAddress, currentEmail, 'circle');
+    // Set the real callback via the ref (closure in constructor delegates here)
+    callbackRef.current = async (error) => {
+      callbackRef.current = null;
+      if (error) {
+        const msg = error.message || '';
+        // Session/token expired → silently redirect to request a fresh code
+        if (msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('session') || msg.toLowerCase().includes('token')) {
+          setView('email');
+          setErrMsg('Session timed out — please request a new code.');
+          return;
+        }
+        setErrMsg(msg || 'Verification failed');
+        setView('err');
+        return;
+      }
+
+      try {
+        const r = await fetch('/api/wallet/confirm', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: currentEmail }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error);
+
+        setWalletAddr(d.walletAddress);
+
+        if (d.isExisting && d.hasPassword) {
+          // Returning user already set up — connect immediately
+          onConnect?.(d.walletAddress, currentEmail, 'circle');
           return;
         }
 
-        // New user — need to execute wallet creation challenge.
-        // Store data in ref so the PIN setup step is triggered from a button click
-        // (NOT from inside this callback) to avoid Circle SDK state conflicts.
-        pinSetupRef.current = {
-          challengeId: confirmD.challengeId,
-          userToken,
-          encryptionKey,
-          refreshToken,
-          email: currentEmail,
-        };
-        setView('setup-pin');
+        setView('set-password');
       } catch (ce) {
         setErrMsg(ce.message || 'Wallet setup failed');
         setView('err');
@@ -199,45 +150,32 @@ export default function WalletModal({ onClose, onConnect }) {
     s.verifyOtp();
   }
 
-  // Called from the "Set Up PIN" button — runs execute() OUTSIDE the SDK callback
-  // to avoid iframe conflicts. This is the fix for the blank PIN screen issue.
-  function executePinSetup() {
-    const { challengeId, userToken, encryptionKey, refreshToken, email: currentEmail } = pinSetupRef.current;
-    const s = getSdk();
-    s.setAuthentication({ userToken, encryptionKey });
-    setView('pin-running');
-
-    s.execute(challengeId, async (execErr) => {
-      if (execErr) {
-        setErrMsg(execErr.message || 'PIN setup failed — please try again');
-        setView('setup-pin'); // let user retry
-        return;
-      }
-      try {
-        const finR = await fetch('/api/wallet/finalize', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: currentEmail, userToken }),
-        });
-        const finD = await finR.json();
-        if (!finR.ok) throw new Error(finD.error);
-        localStorage.setItem('circle_session', JSON.stringify({
-          userToken, encryptionKey, refreshToken, walletAddress: finD.walletAddress, email: currentEmail, timestamp: Date.now(),
-        }));
-        setWalletAddr(finD.walletAddress);
-        setView('success');
-        onConnect?.(finD.walletAddress, currentEmail, 'circle');
-      } catch (fe) {
-        setErrMsg(fe.message || 'Failed to finalize wallet');
-        setView('err');
-      }
-    });
+  async function submitPassword(e) {
+    e.preventDefault();
+    if (!password.trim()) return;
+    if (password !== confirmPassword) { setErrMsg('Passwords do not match'); return; }
+    if (password.length < 6) { setErrMsg('Password must be at least 6 characters'); return; }
+    setLoading(true); setErrMsg('');
+    try {
+      const r = await fetch('/api/wallet/set-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error);
+      setView('success');
+      onConnect?.(walletAddr, email.trim(), 'circle');
+    } catch (err) {
+      setErrMsg(err.message || 'Failed to set password');
+    } finally {
+      setLoading(false);
+    }
   }
 
   const stopClose = (e) => e.stopPropagation();
-  const lockBgClose = view === 'otp-running' || view === 'pin-running';
 
   return (
-    <div onClick={lockBgClose ? undefined : onClose} style={OVERLAY}>
+    <div onClick={view === 'otp-running' ? undefined : onClose} style={OVERLAY}>
       <div onClick={stopClose} style={MODAL}>
 
         {/* ── MAIN ── */}
@@ -246,7 +184,7 @@ export default function WalletModal({ onClose, onConnect }) {
             Connect to <em style={{ fontStyle: 'italic', color: 'var(--gold)' }}>AlphaChef</em>
           </h2>
           <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 28, lineHeight: 1.6 }}>
-            New here? Create a Circle wallet with your email. Already have one? Connect it directly.
+            New here? Create a wallet with your email. Already have one? Connect it directly.
           </p>
 
           <div style={LABEL}>Circle Wallet (Email)</div>
@@ -255,11 +193,11 @@ export default function WalletModal({ onClose, onConnect }) {
             <span style={ICON}>✉</span>
             <div>
               <div style={{ fontSize: 14, fontWeight: 600 }}>Continue with Email</div>
-              <div style={{ fontSize: 11, color: 'var(--dim)', marginTop: 2 }}>Circle wallet · Arc testnet</div>
+              <div style={{ fontSize: 11, color: 'var(--dim)', marginTop: 2 }}>Verify with OTP · Arc testnet</div>
             </div>
           </button>
 
-          <div style={DIVIDER}><div style={LINE} /><span style={{ fontSize: 11, color: 'var(--dim)', letterSpacing: 1, textTransform: 'uppercase' }}>Already have a wallet?</span><div style={LINE} /></div>
+          <div style={DIVIDER}><div style={LINE} /><span style={{ fontSize: 11, color: 'var(--dim)', letterSpacing: 1, textTransform: 'uppercase' }}>Or</span><div style={LINE} /></div>
 
           <ConnectButton.Custom>
             {({ openConnectModal, mounted }) => !mounted ? null : (
@@ -285,13 +223,13 @@ export default function WalletModal({ onClose, onConnect }) {
           <button onClick={() => setView('main')} style={{ background: 'none', border: 'none', color: 'var(--dim)', fontSize: 13, cursor: 'pointer', padding: '0 0 20px', display: 'flex', alignItems: 'center', gap: 6 }}>← Back</button>
           <h2 style={{ fontFamily: '"Playfair Display",serif', fontSize: 24, fontWeight: 400, marginBottom: 8 }}>Enter your email</h2>
           <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 24, lineHeight: 1.6 }}>
-            Returning users connect instantly. New users will set a 6-digit PIN to secure their wallet.
+            We'll send a one-time verification code to confirm your identity.
           </p>
           <form onSubmit={submitEmail}>
             <input type="email" placeholder="you@example.com" value={email} onChange={e => setEmail(e.target.value)} required autoFocus style={INPUT} />
             {errMsg && <p style={{ fontSize: 12, color: '#ff6b6b', marginTop: 8, lineHeight: 1.5 }}>{errMsg}</p>}
             <button type="submit" disabled={loading || !email.trim()} style={{ ...BTN(true), marginTop: 14, opacity: loading || !email.trim() ? 0.55 : 1, cursor: loading || !email.trim() ? 'not-allowed' : 'pointer' }}>
-              {loading ? 'Connecting…' : 'Continue →'}
+              {loading ? 'Sending code…' : 'Send Verification Code →'}
             </button>
           </form>
         </>)}
@@ -301,13 +239,9 @@ export default function WalletModal({ onClose, onConnect }) {
           <h2 style={{ fontFamily: '"Playfair Display",serif', fontSize: 24, fontWeight: 400, marginBottom: 12 }}>
             Check your <em style={{ color: 'var(--gold)' }}>email</em>
           </h2>
-          <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8, lineHeight: 1.65 }}>
-            A verification code was sent to <strong style={{ color: 'var(--white)' }}>{email}</strong>.
-          </p>
           <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 28, lineHeight: 1.65 }}>
-            {isReturning
-              ? 'Your session needs renewal. Enter the code to restore access.'
-              : 'Enter the code, then set a 6-digit PIN to secure your wallet.'}
+            A verification code was sent to <strong style={{ color: 'var(--white)' }}>{email}</strong>.
+            Enter it in the dialog below.
           </p>
           {errMsg && <p style={{ fontSize: 12, color: '#ff6b6b', marginBottom: 14, lineHeight: 1.5 }}>{errMsg}</p>}
           <button onClick={startOtpVerification} style={BTN(true)}>
@@ -316,71 +250,55 @@ export default function WalletModal({ onClose, onConnect }) {
           <button onClick={() => setView('email')} style={{ ...BTN(false), marginTop: 10, justifyContent: 'center' }}>← Use a different email</button>
         </>)}
 
-        {/* ── OTP IFRAME RUNNING ── */}
+        {/* ── OTP RUNNING (Circle SDK iframe) ── */}
         {view === 'otp-running' && (
           <div style={{ textAlign: 'center', padding: '20px 0' }}>
             <h2 style={{ fontFamily: '"Playfair Display",serif', fontSize: 22, fontWeight: 400, marginBottom: 12 }}>
               Verify your email
             </h2>
             <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 24, lineHeight: 1.65 }}>
-              Enter the verification code sent to <strong style={{ color: 'var(--white)' }}>{email}</strong> in the Circle dialog.
+              Enter the verification code sent to <strong style={{ color: 'var(--white)' }}>{email}</strong>.
             </p>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, color: 'var(--dim)', fontSize: 13 }}>
               <span style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid var(--gold)', borderTopColor: 'transparent', display: 'inline-block', animation: 'spin .8s linear infinite' }} />
-              Waiting for Circle verification…
+              Waiting for verification…
             </div>
             <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
           </div>
         )}
 
-        {/* ── NEW USER: SET UP PIN (explicit button — not from inside SDK callback) ── */}
-        {view === 'setup-pin' && (
-          <div style={{ textAlign: 'center', padding: '8px 0' }}>
-            <div style={{ fontSize: 36, marginBottom: 14 }}>🔐</div>
-            <h2 style={{ fontFamily: '"Playfair Display",serif', fontSize: 22, fontWeight: 400, marginBottom: 10 }}>
-              Set up your <em style={{ color: 'var(--gold)' }}>PIN</em>
-            </h2>
-            <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8, lineHeight: 1.65 }}>
-              Email verified. Now create a 6-digit PIN to secure your Circle wallet.
-            </p>
-            <p style={{ fontSize: 12, color: 'var(--dim)', marginBottom: 24, lineHeight: 1.6 }}>
-              Your PIN protects your wallet — you'll enter it each time you pay for a signal. Keep it safe.
-            </p>
-            {errMsg && <p style={{ fontSize: 12, color: '#ff6b6b', marginBottom: 14 }}>{errMsg}</p>}
-            <button onClick={executePinSetup} style={BTN(true)}>
-              Set Up PIN →
+        {/* ── SET PASSWORD ── */}
+        {view === 'set-password' && (<>
+          <div style={{ fontSize: 36, textAlign: 'center', marginBottom: 14 }}>🔑</div>
+          <h2 style={{ fontFamily: '"Playfair Display",serif', fontSize: 22, fontWeight: 400, marginBottom: 8, textAlign: 'center' }}>
+            Set a <em style={{ color: 'var(--gold)' }}>spend password</em>
+          </h2>
+          <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 24, lineHeight: 1.65, textAlign: 'center' }}>
+            You'll enter this password each time you unlock a signal. Keep it safe.
+          </p>
+          <form onSubmit={submitPassword}>
+            <input
+              type="password" placeholder="Password (min 6 chars)" value={password}
+              onChange={e => setPassword(e.target.value)} required autoFocus style={{ ...INPUT, marginBottom: 10 }}
+            />
+            <input
+              type="password" placeholder="Confirm password" value={confirmPassword}
+              onChange={e => setConfirmPassword(e.target.value)} required style={INPUT}
+            />
+            {errMsg && <p style={{ fontSize: 12, color: '#ff6b6b', marginTop: 8, lineHeight: 1.5 }}>{errMsg}</p>}
+            <button type="submit" disabled={loading || !password.trim() || !confirmPassword.trim()} style={{ ...BTN(true), marginTop: 14, opacity: loading || !password.trim() || !confirmPassword.trim() ? 0.55 : 1, cursor: loading ? 'not-allowed' : 'pointer' }}>
+              {loading ? 'Setting up…' : 'Set Password & Connect →'}
             </button>
-            <button onClick={onClose} style={{ ...BTN(false), marginTop: 10, justifyContent: 'center' }}>Cancel</button>
-          </div>
-        )}
-
-        {/* ── PIN IFRAME RUNNING ── */}
-        {view === 'pin-running' && (
-          <div style={{ textAlign: 'center', padding: '20px 0' }}>
-            <h2 style={{ fontFamily: '"Playfair Display",serif', fontSize: 22, fontWeight: 400, marginBottom: 12 }}>
-              Creating your wallet
-            </h2>
-            <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 24, lineHeight: 1.65 }}>
-              Complete the Circle PIN setup in the dialog. Choose and confirm a 6-digit PIN.
-            </p>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, color: 'var(--dim)', fontSize: 13 }}>
-              <span style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid var(--gold)', borderTopColor: 'transparent', display: 'inline-block', animation: 'spin .8s linear infinite' }} />
-              Waiting for PIN confirmation…
-            </div>
-            <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-          </div>
-        )}
+          </form>
+        </>)}
 
         {/* ── SUCCESS ── */}
         {view === 'success' && (
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 40, marginBottom: 16 }}>✓</div>
             <h2 style={{ fontFamily: '"Playfair Display",serif', fontSize: 24, fontWeight: 400, marginBottom: 10 }}>
-              Wallet <em style={{ color: 'var(--gold)' }}>{isReturning ? 'Restored' : 'Ready'}</em>
+              Wallet <em style={{ color: 'var(--gold)' }}>Connected</em>
             </h2>
-            <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 20, lineHeight: 1.6 }}>
-              {isReturning ? 'You\'re reconnected on Arc testnet.' : 'Your Circle wallet is connected on Arc testnet.'}
-            </p>
             <div style={{ background: 'rgba(201,162,39,.06)', border: '1px solid rgba(201,162,39,.2)', borderRadius: 10, padding: '10px 14px', fontSize: 12, fontFamily: 'monospace', color: 'var(--gold)', wordBreak: 'break-all', marginBottom: 20 }}>
               {walletAddr}
             </div>
@@ -389,13 +307,12 @@ export default function WalletModal({ onClose, onConnect }) {
         )}
 
         {/* ── ERROR ── */}
-        {view === 'err' && (
-          <>
-            <h2 style={{ fontFamily: '"Playfair Display",serif', fontSize: 22, fontWeight: 400, marginBottom: 12, color: '#ff6b6b' }}>Something went wrong</h2>
-            <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 20, lineHeight: 1.6 }}>{errMsg}</p>
-            <button onClick={() => setView('main')} style={BTN(false)}>← Start over</button>
-          </>
-        )}
+        {view === 'err' && (<>
+          <h2 style={{ fontFamily: '"Playfair Display",serif', fontSize: 22, fontWeight: 400, marginBottom: 12, color: '#ff6b6b' }}>Something went wrong</h2>
+          <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 20, lineHeight: 1.6 }}>{errMsg}</p>
+          <button onClick={() => { setView('email'); setErrMsg(''); }} style={BTN(true)}>← Try again</button>
+          <button onClick={() => setView('main')} style={{ ...BTN(false), marginTop: 10, justifyContent: 'center' }}>Start over</button>
+        </>)}
 
       </div>
     </div>

@@ -67,6 +67,21 @@ const circleClient = process.env.CIRCLE_API_KEY
 
 const AGENT_SECRET = process.env.AGENT_SECRET || 'alphachef-agent-secret-2024';
 
+const USDC_ARC = '0x3600000000000000000000000000000000000000';
+async function getOnChainUsdcBalance(walletAddress) {
+  const rpc = process.env.ARC_RPC_URL;
+  if (!rpc) return Infinity; // no RPC → don't block unlocks
+  const calldata = '0x70a08231' + walletAddress.slice(2).toLowerCase().padStart(64, '0');
+  const resp = await fetch(rpc, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_call', params: [{ to: USDC_ARC, data: calldata }, 'latest'], id: 1 }),
+  });
+  const json = await resp.json();
+  const hex = json.result || '0x0';
+  return Number(BigInt(hex)) / 1e6;
+}
+
 function broadcast(data) {
   const msg = JSON.stringify(data);
   wss.clients.forEach(client => {
@@ -139,9 +154,13 @@ app.get('/api/signals/:id', (req, res) => {
 });
 
 app.post('/api/unlock', async (req, res) => {
-  const { signal_id, wallet_address, tx_hash, message } = req.body;
+  // Support both old {signal_id, wallet_address, tx_hash} and new {signalId, walletAddress, amount}
+  const signal_id = req.body.signal_id || req.body.signalId;
+  const wallet_address = req.body.wallet_address || req.body.walletAddress;
+  const tx_hash = req.body.tx_hash;
+  const message = req.body.message;
 
-  if (!signal_id || !wallet_address || !tx_hash) {
+  if (!signal_id || !wallet_address) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
@@ -152,9 +171,8 @@ app.post('/api/unlock', async (req, res) => {
     return res.json({ success: true, message: 'Already unlocked', signal: signalToTeaser(signal, wallet_address) });
   }
 
-  // Verify MetaMask/Rabby signature if a message was signed
-  // Circle unlocks send a `circle_` prefix — those are authorised by PIN via the SDK
-  if (message && !tx_hash.startsWith('circle_')) {
+  // For MetaMask/Rabby: verify signature
+  if (message && tx_hash && !tx_hash.startsWith('circle_')) {
     try {
       const recovered = ethers.verifyMessage(message, tx_hash);
       if (recovered.toLowerCase() !== wallet_address.toLowerCase()) {
@@ -165,11 +183,28 @@ app.post('/api/unlock', async (req, res) => {
     }
   }
 
+  // For Circle wallets (no MetaMask signature): check on-chain USDC balance
+  const isCircleUnlock = !message || !tx_hash || tx_hash.startsWith('circle_') || req.body.walletAddress;
+  if (isCircleUnlock) {
+    try {
+      const balance = await getOnChainUsdcBalance(wallet_address);
+      const required = signal.price_usdc || 0.05;
+      if (balance < required) {
+        return res.status(402).json({
+          error: `Insufficient USDC balance. Need ${required.toFixed(2)} USDC, wallet has ${balance.toFixed(4)} USDC.`,
+        });
+      }
+    } catch (e) {
+      console.warn('[unlock] balance check error (proceeding):', e.message);
+    }
+  }
+
+  const txRef = tx_hash || `circle_${Date.now()}`;
   const unlockId = uuidv4();
   db.prepare(`
     INSERT INTO unlocks (id, signal_id, wallet_address, tx_hash, amount_usdc)
     VALUES (?, ?, ?, ?, ?)
-  `).run(unlockId, signal_id, wallet_address, tx_hash, signal.price_usdc);
+  `).run(unlockId, signal_id, wallet_address, txRef, signal.price_usdc);
 
   const fullSignal = signalToTeaser(signal, wallet_address);
   broadcast({ type: 'signal_unlocked', signal_id, wallet_address });
