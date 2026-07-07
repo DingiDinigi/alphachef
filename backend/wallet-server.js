@@ -143,6 +143,20 @@ app.post('/api/wallet/confirm', async (req, res) => {
 
   // Returning user who already has a confirmed Circle wallet
   if (user?.wallet_address && user?.circle_wallet_id) {
+    // Backfill circle_user_id while we have a fresh deviceToken from OTP.
+    // Without it, token refresh (createUserToken) won't work on future unlocks.
+    if (!user.circle_user_id && deviceToken && circleClient) {
+      try {
+        const walletsResp = await circleClient.listWallets({ userToken: deviceToken });
+        const wallets = walletsResp.data?.wallets || [];
+        if (wallets.length > 0 && wallets[0].userId) {
+          db.prepare('UPDATE wallet_users SET circle_user_id = ? WHERE email = ?').run(wallets[0].userId, email);
+          console.log('[wallet/confirm] Backfilled circle_user_id for returning user:', wallets[0].userId);
+        }
+      } catch (e) {
+        console.warn('[wallet/confirm] Backfill circle_user_id failed:', e.message);
+      }
+    }
     console.log('[wallet/confirm] Returning user, Circle wallet already stored:', user.wallet_address);
     return res.json({
       walletAddress: user.wallet_address,
