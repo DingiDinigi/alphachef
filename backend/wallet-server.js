@@ -242,7 +242,17 @@ app.post('/api/wallet/verify-password', async (req, res) => {
 // The frontend must then call sdk.execute(challengeId) for user approval,
 // then POST /api/unlock to record the unlock after Circle confirms.
 const PLATFORM_WALLET = process.env.PLATFORM_WALLET || '';
-const USDC_TOKEN_ADDRESS = process.env.USDC_TOKEN_ADDRESS || '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238'; // ETH-SEPOLIA USDC
+
+// USDC contract addresses per network. ARC-TESTNET uses a different address
+// than ETH-SEPOLIA — using the wrong one causes the transfer to silently target
+// a non-existent token, so no balance is ever deducted.
+const USDC_BY_CHAIN = {
+  'ARC-TESTNET': process.env.ARC_USDC_ADDRESS || '0x3600000000000000000000000000000000000000',
+  'ETH-SEPOLIA':  process.env.USDC_TOKEN_ADDRESS || '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
+};
+function usdcAddressForChain(blockchain) {
+  return USDC_BY_CHAIN[blockchain] || USDC_BY_CHAIN['ETH-SEPOLIA'];
+}
 
 app.post('/api/wallet/prepare-unlock', async (req, res) => {
   const { email, signalId, walletAddress, password, deviceToken, deviceEncryptionKey } = req.body;
@@ -330,13 +340,14 @@ app.post('/api/wallet/prepare-unlock', async (req, res) => {
   //    API only works for PIN-based users.  The deviceToken from the OTP session IS
   //    the userToken; if it has expired the user must reconnect their wallet.
   const amount = (signal.price_usdc || 0.05).toFixed(4);
+  const tokenAddress = usdcAddressForChain(circleBlockchain);
   const transferReq = {
     userToken: deviceToken,
     idempotencyKey: uuidv4(),
     amounts: [amount],
     destinationAddress: PLATFORM_WALLET,
-    tokenAddress: USDC_TOKEN_ADDRESS,
-    tokenBlockchain: circleBlockchain,
+    tokenAddress,
+    blockchain: circleBlockchain,  // SDK field is 'blockchain', not 'tokenBlockchain'
     walletId: circleWalletId,
     fee: { type: 'level', config: { feeLevel: 'HIGH' } },
     refId: signalId,
