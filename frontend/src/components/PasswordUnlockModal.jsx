@@ -172,69 +172,72 @@ export default function PasswordUnlockModal({ email, signal, onSuccess, onClose 
       // ── Step 2: Circle SDK executes the transfer (user approves in iframe) ──
       setState('sdk-approve');
 
-      const sdk = new W3SSdk(
-        { appSettings: { appId: CIRCLE_APP_ID } },
-        async (error, result) => {
-          console.log('[PasswordUnlockModal] SDK callback — error:', error?.message, '| result keys:', result ? Object.keys(result) : 'none');
-
-          if (error) {
-            const msg = error.message || '';
-            if (msg.toLowerCase().includes('cancelled') || msg.toLowerCase().includes('cancel') || msg.toLowerCase().includes('denied')) {
-              setState('password');
-              setErrMsg('Transfer cancelled — please try again.');
-            } else if (msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('session')) {
-              setState('session-expired');
-            } else {
-              setState('error');
-              setErrMsg(msg || 'Transfer failed in Circle SDK');
-            }
-            return;
-          }
-
-          // ── Step 3: Circle confirmed — record unlock in DB ──────────────────
-          console.log('[PasswordUnlockModal] Step 3: SDK approved — recording unlock');
-          setState('confirming');
-
-          try {
-            const circleTransferId = result?.data?.signature
-              || result?.data?.hash
-              || result?.data?.id
-              || `circle_exec_${Date.now()}`;
-
-            const ur = await fetch('/api/unlock', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                signalId: signal.id,
-                walletAddress,
-                circleConfirmed: true,
-                circleTransferId,
-              }),
-            });
-            const ud = await ur.json();
-            console.log('[PasswordUnlockModal] /api/unlock response:', ur.status, ud.success);
-
-            if (!ur.ok) throw new Error(ud.error || 'Failed to record unlock');
-
-            setState('success');
-            setTimeout(() => {
-              onSuccess?.(ud.signal);
-              onClose?.();
-            }, 1400);
-          } catch (recordErr) {
-            console.error('[PasswordUnlockModal] Record unlock error:', recordErr.message);
-            setState('error');
-            setErrMsg(recordErr.message || 'Unlock recorded but signal data failed to load');
-          }
-        },
-      );
-
+      // W3SSdk constructor second arg is onLoginComplete (for OTP/social flows only).
+      // The challenge completion callback must be passed to execute(), not the constructor.
+      const sdk = new W3SSdk({ appSettings: { appId: CIRCLE_APP_ID } });
       sdkRef.current = sdk;
+
+      // For execute(), pass the USERTOKEN via authentication (not loginConfigs which
+      // is for deviceToken/OTP flows). deviceToken here is actually the USERTOKEN
+      // stored by WalletModal after OTP completed.
       sdk.updateConfigs({
         appSettings: { appId: CIRCLE_APP_ID },
-        loginConfigs: { deviceToken, deviceEncryptionKey },
+        authentication: { userToken: deviceToken, encryptionKey: deviceEncryptionKey },
       });
-      sdk.execute(challengeId);
+
+      sdk.execute(challengeId, async (error, result) => {
+        console.log('[PasswordUnlockModal] SDK callback — error:', error?.message, '| result keys:', result ? Object.keys(result) : 'none');
+
+        if (error) {
+          const msg = error.message || '';
+          if (msg.toLowerCase().includes('cancelled') || msg.toLowerCase().includes('cancel') || msg.toLowerCase().includes('denied')) {
+            setState('password');
+            setErrMsg('Transfer cancelled — please try again.');
+          } else if (msg.toLowerCase().includes('expired') || msg.toLowerCase().includes('session')) {
+            setState('session-expired');
+          } else {
+            setState('error');
+            setErrMsg(msg || 'Transfer failed in Circle SDK');
+          }
+          return;
+        }
+
+        // ── Step 3: Circle confirmed — record unlock in DB ──────────────────
+        console.log('[PasswordUnlockModal] Step 3: SDK approved — recording unlock');
+        setState('confirming');
+
+        try {
+          const circleTransferId = result?.data?.signature
+            || result?.data?.hash
+            || result?.data?.id
+            || `circle_exec_${Date.now()}`;
+
+          const ur = await fetch('/api/unlock', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              signalId: signal.id,
+              walletAddress,
+              circleConfirmed: true,
+              circleTransferId,
+            }),
+          });
+          const ud = await ur.json();
+          console.log('[PasswordUnlockModal] /api/unlock response:', ur.status, ud.success);
+
+          if (!ur.ok) throw new Error(ud.error || 'Failed to record unlock');
+
+          setState('success');
+          setTimeout(() => {
+            onSuccess?.(ud.signal);
+            onClose?.();
+          }, 1400);
+        } catch (recordErr) {
+          console.error('[PasswordUnlockModal] Record unlock error:', recordErr.message);
+          setState('error');
+          setErrMsg(recordErr.message || 'Unlock recorded but signal data failed to load');
+        }
+      });
 
     } catch (err) {
       console.error('[PasswordUnlockModal] Unexpected error:', err.message);
