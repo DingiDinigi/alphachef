@@ -43,13 +43,31 @@ export default function PasswordUnlockModal({ email, signal, onSuccess, onClose 
   const [errMsg, setErrMsg] = useState('');
   const sdkRef = useRef(null);
 
+  function isTokenExpired(token) {
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      return payload.exp * 1000 < Date.now();
+    } catch (_) {
+      return false;
+    }
+  }
+
   function getCircleSession() {
     try {
+      // Prefer localStorage USERTOKEN set by WalletModal after OTP completes.
+      // The deviceToken stored before OTP is a LOGINTOKEN Circle rejects for transfers.
+      const userToken = localStorage.getItem('circle_user_token');
+      const encryptionKey = localStorage.getItem('circle_encryption_key') || '';
+      if (userToken) {
+        if (isTokenExpired(userToken)) return null;
+        return { deviceToken: userToken, deviceEncryptionKey: encryptionKey, email };
+      }
+      // Fallback to sessionStorage (older sessions before this fix)
       const raw = sessionStorage.getItem('circle_session');
       if (!raw) return null;
       const session = JSON.parse(raw);
-      // Treat session as valid for up to 23 hours
       if (Date.now() - session.storedAt > 23 * 60 * 60 * 1000) return null;
+      if (session.deviceToken && isTokenExpired(session.deviceToken)) return null;
       return session;
     } catch (_) {
       return null;

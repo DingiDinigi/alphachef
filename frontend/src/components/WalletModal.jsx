@@ -104,7 +104,7 @@ export default function WalletModal({ onClose, onConnect }) {
     if (!s) { setErrMsg('Session lost — please try again'); setView('email'); return; }
 
     // Set the real callback via the ref (closure in constructor delegates here)
-    callbackRef.current = async (error) => {
+    callbackRef.current = async (error, result) => {
       callbackRef.current = null;
       if (error) {
         const msg = error.message || '';
@@ -119,12 +119,24 @@ export default function WalletModal({ onClose, onConnect }) {
         return;
       }
 
-      // Store Circle session tokens in sessionStorage so PasswordUnlockModal
-      // can use them to create transfer challenges without re-auth.
+      // onLoginComplete fires with the real USERTOKEN (not LOGINTOKEN).
+      // The deviceToken from createDeviceTokenForEmailLogin is only valid for
+      // the OTP step; Circle rejects it for transactions.
+      const userToken = result?.userToken || result?.data?.userToken || deviceToken;
+      const encryptionKey = result?.encryptionKey || result?.data?.encryptionKey || deviceEncryptionKey;
+
+      // Store USERTOKEN in localStorage so it survives page navigations and
+      // is available when PasswordUnlockModal needs it for transfers.
+      try {
+        localStorage.setItem('circle_user_token', userToken);
+        localStorage.setItem('circle_encryption_key', encryptionKey || '');
+      } catch (_) {}
+
+      // Also keep sessionStorage in sync (backward compat).
       try {
         sessionStorage.setItem('circle_session', JSON.stringify({
-          deviceToken,
-          deviceEncryptionKey,
+          deviceToken: userToken,
+          deviceEncryptionKey: encryptionKey,
           email: currentEmail,
           storedAt: Date.now(),
         }));
