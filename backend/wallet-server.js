@@ -335,19 +335,51 @@ app.post('/api/wallet/prepare-unlock', async (req, res) => {
     return res.status(500).json({ error: 'Platform wallet not configured (PLATFORM_WALLET env missing)' });
   }
 
-  // 5. Create the Circle transfer challenge using the frontend-provided deviceToken.
-  //    Circle email-auth users (authMode: EMAIL) cannot use createUserToken — that
-  //    API only works for PIN-based users.  The deviceToken from the OTP session IS
-  //    the userToken; if it has expired the user must reconnect their wallet.
+  // 5. Fetch the wallet's actual USDC tokenId from Circle.
+  //    Using tokenAddress+blockchain causes "insufficient funds" if Circle's internal
+  //    token registry uses a different address than what's stored on-chain. Using the
+  //    Circle tokenId from the wallet's balance list is always correct.
   const amount = (signal.price_usdc || 0.05).toFixed(4);
-  const tokenAddress = usdcAddressForChain(circleBlockchain);
+  let usdcTokenId = null;
+
+  try {
+    const balResp = await circleClient.getWalletTokenBalance({
+      walletId: circleWalletId,
+      userToken: deviceToken,
+      includeAll: false,
+    });
+    const tokenBalances = balResp.data?.tokenBalances || [];
+    console.log('[prepare-unlock] Circle token balances:', JSON.stringify(
+      tokenBalances.map(b => ({ symbol: b.token?.symbol, amount: b.amount, id: b.token?.id, addr: b.token?.tokenAddress }))
+    ));
+    const usdcBal = tokenBalances.find(b => b.token?.symbol?.toUpperCase() === 'USDC');
+    if (!usdcBal) {
+      const found = tokenBalances.map(b => b.token?.symbol || '?').join(', ') || 'none';
+      return res.status(402).json({ error: `No USDC found in Circle wallet (tokens: ${found}). Fund via Circle faucet.` });
+    }
+    const circleUsdcBalance = parseFloat(usdcBal.amount || '0');
+    const required = parseFloat(amount);
+    if (circleUsdcBalance < required) {
+      return res.status(402).json({ error: `Insufficient USDC: Circle wallet has ${circleUsdcBalance.toFixed(2)}, need ${required.toFixed(2)}` });
+    }
+    usdcTokenId = usdcBal.token.id;
+    console.log('[prepare-unlock] Using USDC tokenId:', usdcTokenId, 'Circle balance:', circleUsdcBalance);
+  } catch (e) {
+    console.error('[prepare-unlock] getWalletTokenBalance error:', circleErr(e));
+    // Fall through to tokenAddress approach if balance fetch fails
+  }
+
+  // 6. Create the Circle transfer challenge using the frontend-provided userToken.
+  const tokenSpec = usdcTokenId
+    ? { tokenId: usdcTokenId }
+    : { tokenAddress: usdcAddressForChain(circleBlockchain), blockchain: circleBlockchain };
+
   const transferReq = {
     userToken: deviceToken,
     idempotencyKey: uuidv4(),
     amounts: [amount],
     destinationAddress: PLATFORM_WALLET,
-    tokenAddress,
-    blockchain: circleBlockchain,  // SDK field is 'blockchain', not 'tokenBlockchain'
+    ...tokenSpec,
     walletId: circleWalletId,
     fee: { type: 'level', config: { feeLevel: 'HIGH' } },
     refId: signalId,
