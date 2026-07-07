@@ -243,15 +243,13 @@ app.post('/api/wallet/verify-password', async (req, res) => {
 // then POST /api/unlock to record the unlock after Circle confirms.
 const PLATFORM_WALLET = process.env.PLATFORM_WALLET || '';
 
-// USDC contract addresses per network. ARC-TESTNET uses a different address
-// than ETH-SEPOLIA — using the wrong one causes the transfer to silently target
-// a non-existent token, so no balance is ever deducted.
+// USDC contract address on ARC-TESTNET. Used as last-resort fallback if Circle's
+// token registry lookup fails to find a tokenId dynamically.
 const USDC_BY_CHAIN = {
   'ARC-TESTNET': process.env.ARC_USDC_ADDRESS || '0x3600000000000000000000000000000000000000',
-  'ETH-SEPOLIA':  process.env.USDC_TOKEN_ADDRESS || '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
 };
 function usdcAddressForChain(blockchain) {
-  return USDC_BY_CHAIN[blockchain] || USDC_BY_CHAIN['ETH-SEPOLIA'];
+  return USDC_BY_CHAIN[blockchain] || USDC_BY_CHAIN['ARC-TESTNET'];
 }
 
 app.post('/api/wallet/prepare-unlock', async (req, res) => {
@@ -303,7 +301,7 @@ app.post('/api/wallet/prepare-unlock', async (req, res) => {
 
   // 4. Ensure we have the Circle wallet ID
   let circleWalletId = user.circle_wallet_id;
-  let circleBlockchain = user.circle_blockchain || 'ETH-SEPOLIA';
+  let circleBlockchain = user.circle_blockchain || 'ARC-TESTNET';
 
   if (!circleWalletId && circleClient) {
     console.log('[prepare-unlock] circle_wallet_id missing — fetching from Circle via deviceToken');
@@ -445,14 +443,10 @@ const CHAIN_CONFIG = {
     rpc:  process.env.ARC_RPC_URL,
     usdc: process.env.ARC_USDC_ADDRESS || '0x3600000000000000000000000000000000000000',
   },
-  'ETH-SEPOLIA': {
-    rpc:  process.env.ETH_SEPOLIA_RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com',
-    usdc: process.env.USDC_TOKEN_ADDRESS  || '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
-  },
 };
 
 async function getOnChainUsdcBalance(walletAddress, blockchain) {
-  const chain = CHAIN_CONFIG[blockchain] || CHAIN_CONFIG['ETH-SEPOLIA'];
+  const chain = CHAIN_CONFIG[blockchain] || CHAIN_CONFIG['ARC-TESTNET'];
   if (!chain.rpc) throw new Error(`No RPC configured for ${blockchain}`);
   const calldata = '0x70a08231' + walletAddress.slice(2).toLowerCase().padStart(64, '0');
   const resp = await fetch(chain.rpc, {
@@ -470,7 +464,7 @@ app.get('/api/wallet/balance', async (req, res) => {
   if (!email) return res.json({ balance: '0' });
   const user = db.prepare('SELECT wallet_address, circle_blockchain FROM wallet_users WHERE email = ?').get(email);
   if (!user?.wallet_address) return res.json({ balance: '0' });
-  const blockchain = user.circle_blockchain || 'ETH-SEPOLIA';
+  const blockchain = user.circle_blockchain || 'ARC-TESTNET';
   try {
     const balance = await getOnChainUsdcBalance(user.wallet_address, blockchain);
     console.log(`[balance] ${email} — ${blockchain} — ${balance} USDC`);
