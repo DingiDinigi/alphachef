@@ -438,16 +438,27 @@ app.post('/api/wallet/refresh', (req, res) => {
 });
 
 // ── GET /api/wallet/balance ────────────────────────────────────────────────
-const USDC_ARC = '0x3600000000000000000000000000000000000000';
+// RPC and USDC address per blockchain. The Circle wallet's actual blockchain
+// (stored in circle_blockchain) determines which chain to query.
+const CHAIN_CONFIG = {
+  'ARC-TESTNET': {
+    rpc:  process.env.ARC_RPC_URL,
+    usdc: process.env.ARC_USDC_ADDRESS || '0x3600000000000000000000000000000000000000',
+  },
+  'ETH-SEPOLIA': {
+    rpc:  process.env.ETH_SEPOLIA_RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com',
+    usdc: process.env.USDC_TOKEN_ADDRESS  || '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
+  },
+};
 
-async function getOnChainUsdcBalance(walletAddress) {
-  const rpc = process.env.ARC_RPC_URL;
-  if (!rpc) throw new Error('ARC_RPC_URL not configured in .env');
+async function getOnChainUsdcBalance(walletAddress, blockchain) {
+  const chain = CHAIN_CONFIG[blockchain] || CHAIN_CONFIG['ETH-SEPOLIA'];
+  if (!chain.rpc) throw new Error(`No RPC configured for ${blockchain}`);
   const calldata = '0x70a08231' + walletAddress.slice(2).toLowerCase().padStart(64, '0');
-  const resp = await fetch(rpc, {
+  const resp = await fetch(chain.rpc, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_call', params: [{ to: USDC_ARC, data: calldata }, 'latest'], id: 1 }),
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_call', params: [{ to: chain.usdc, data: calldata }, 'latest'], id: 1 }),
   });
   const json = await resp.json();
   const hex = json.result || '0x0';
@@ -457,14 +468,16 @@ async function getOnChainUsdcBalance(walletAddress) {
 app.get('/api/wallet/balance', async (req, res) => {
   const { email } = req.query;
   if (!email) return res.json({ balance: '0' });
-  const user = db.prepare('SELECT wallet_address FROM wallet_users WHERE email = ?').get(email);
+  const user = db.prepare('SELECT wallet_address, circle_blockchain FROM wallet_users WHERE email = ?').get(email);
   if (!user?.wallet_address) return res.json({ balance: '0' });
+  const blockchain = user.circle_blockchain || 'ETH-SEPOLIA';
   try {
-    const balance = await getOnChainUsdcBalance(user.wallet_address);
-    res.json({ balance: balance.toFixed(6), walletAddress: user.wallet_address });
+    const balance = await getOnChainUsdcBalance(user.wallet_address, blockchain);
+    console.log(`[balance] ${email} — ${blockchain} — ${balance} USDC`);
+    res.json({ balance: balance.toFixed(6), walletAddress: user.wallet_address, blockchain });
   } catch (e) {
     console.error('[balance] error:', e.message);
-    res.json({ balance: '0', walletAddress: user.wallet_address });
+    res.json({ balance: '0', walletAddress: user.wallet_address, blockchain });
   }
 });
 
