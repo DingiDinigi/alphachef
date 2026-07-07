@@ -76,23 +76,42 @@ export default function SignalDetail({ signal, onClose }) {
         <div style={{ background: 'rgba(255,255,255,.025)', border: '1px solid var(--border)', borderRadius: 11, padding: '18px 22px' }}>
           <h4 style={{ fontSize: 10, fontWeight: 800, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--dim)', marginBottom: 11 }}>On-Chain Proof</h4>
           {[
-            ['Signal ID', signal.id?.slice(0, 16) + '...'],
-            ['Contract', signal.contract_signal_id ? signal.contract_signal_id.slice(0, 16) + '...' : 'Arc Testnet'],
+            ['Signal ID', signal.id],
+            ['Contract', '0x722e0b499FedCE47a90Df7837405003B203dF417'],
             ['Amount Paid', `${signal.price_usdc} USDC`],
             ['Network', 'Arc Testnet (Chain ID: 5042002)'],
             ['Settled', '✓ < 500ms'],
           ].map(([label, value]) => (
-            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '7px 0', borderBottom: '1px solid rgba(255,255,255,.04)' }}>
-              <span style={{ color: 'var(--dim)', fontFamily: '"JetBrains Mono", monospace' }}>{label}</span>
-              <span style={{ color: 'rgba(240,237,230,.6)', fontFamily: '"JetBrains Mono", monospace', fontSize: 11 }}>
-                {signal.tx_hash && label === 'Signal ID' ? (
-                  <a href={`https://explorer.testnet.arc.fun/tx/${signal.tx_hash}`} target="_blank" rel="noreferrer" style={{ color: 'var(--gold)', textDecoration: 'none' }}>
-                    {value}
-                  </a>
-                ) : value}
+            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', fontSize: 12, padding: '7px 0', borderBottom: '1px solid rgba(255,255,255,.04)', gap: 16 }}>
+              <span style={{ color: 'var(--dim)', fontFamily: '"JetBrains Mono", monospace', flexShrink: 0 }}>{label}</span>
+              <span style={{ color: 'rgba(240,237,230,.6)', fontFamily: '"JetBrains Mono", monospace', fontSize: 11, wordBreak: 'break-all', textAlign: 'right' }}>
+                {value}
               </span>
             </div>
           ))}
+          {signal.tx_hash && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', fontSize: 12, padding: '7px 0', borderBottom: '1px solid rgba(255,255,255,.04)', gap: 16 }}>
+                <span style={{ color: 'var(--dim)', fontFamily: '"JetBrains Mono", monospace', flexShrink: 0 }}>Arc Transaction</span>
+                <span style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 11, wordBreak: 'break-all', textAlign: 'right', color: 'var(--gold)' }}>
+                  {signal.tx_hash}
+                </span>
+              </div>
+              <a
+                href={`https://explorer.testnet.arc.fun/tx/${signal.tx_hash}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  display: 'inline-block', marginTop: 14, padding: '9px 18px',
+                  background: 'rgba(201,162,39,.1)', border: '1px solid rgba(201,162,39,.35)',
+                  borderRadius: 8, color: 'var(--gold)', fontFamily: '"JetBrains Mono", monospace',
+                  fontSize: 12, fontWeight: 700, textDecoration: 'none', letterSpacing: '0.5px',
+                }}
+              >
+                View on Arc Explorer →
+              </a>
+            </>
+          )}
         </div>
       </div>
     </div>
