@@ -7,7 +7,7 @@ const { v4: uuidv4 } = require('uuid');
 
 const BACKEND_URL = `http://localhost:${process.env.PORT || 3011}`;
 const AGENT_SECRET = process.env.AGENT_SECRET || 'alphachef-agent-secret-2024';
-const ARC_RPC = process.env.ARC_RPC_URL || 'https://rpc.testnet.arc.fun';
+const ARC_RPC = process.env.ARC_RPC_URL || '';
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || '';
 
 let provider;
@@ -516,11 +516,11 @@ async function main() {
 
   await seedInitialSignals();
 
-  // Run immediately then every 5 minutes
+  // Run immediately then every 30 minutes
   await runAgentLoop();
-  cron.schedule('*/5 * * * *', runAgentLoop);
+  cron.schedule('*/30 * * * *', runAgentLoop);
 
-  await log('INFO', '🍳 AlphaChef agent is cooking. Signals every 5 minutes.');
+  await log('INFO', '🍳 AlphaChef agent is cooking. Signals every 30 minutes.');
 }
 
 main().catch(console.error);

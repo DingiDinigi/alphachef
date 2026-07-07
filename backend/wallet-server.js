@@ -162,9 +162,9 @@ app.post('/api/wallet/confirm', async (req, res) => {
       if (wallets.length > 0) {
         const w = wallets[0];
         db.prepare(
-          'UPDATE wallet_users SET wallet_address = ?, circle_wallet_id = ?, circle_blockchain = ? WHERE email = ?'
-        ).run(w.address, w.id, w.blockchain, email);
-        console.log('[wallet/confirm] Stored Circle wallet:', w.address, w.id, w.blockchain);
+          'UPDATE wallet_users SET wallet_address = ?, circle_wallet_id = ?, circle_blockchain = ?, circle_user_id = ? WHERE email = ?'
+        ).run(w.address, w.id, w.blockchain, w.userId || null, email);
+        console.log('[wallet/confirm] Stored Circle wallet:', w.address, w.id, w.blockchain, 'userId:', w.userId);
         return res.json({
           walletAddress: w.address,
           isExisting: !!user.wallet_address,
@@ -291,9 +291,9 @@ app.post('/api/wallet/prepare-unlock', async (req, res) => {
         circleWalletId = wallets[0].id;
         circleBlockchain = wallets[0].blockchain;
         db.prepare(
-          'UPDATE wallet_users SET circle_wallet_id = ?, circle_blockchain = ?, wallet_address = ? WHERE email = ?'
-        ).run(circleWalletId, circleBlockchain, wallets[0].address, email);
-        console.log('[prepare-unlock] Stored Circle wallet ID:', circleWalletId, circleBlockchain);
+          'UPDATE wallet_users SET circle_wallet_id = ?, circle_blockchain = ?, wallet_address = ?, circle_user_id = ? WHERE email = ?'
+        ).run(circleWalletId, circleBlockchain, wallets[0].address, wallets[0].userId || null, email);
+        console.log('[prepare-unlock] Stored Circle wallet ID:', circleWalletId, circleBlockchain, 'userId:', wallets[0].userId);
       }
     } catch (e) {
       console.error('[prepare-unlock] listWallets error:', circleErr(e));
@@ -311,33 +311,70 @@ app.post('/api/wallet/prepare-unlock', async (req, res) => {
     return res.status(500).json({ error: 'Platform wallet not configured (PLATFORM_WALLET env missing)' });
   }
 
-  // 5. Create the Circle transfer challenge
+  // 5. Generate a fresh userToken — the stored deviceToken may have expired
+  let transferToken = deviceToken;
+  let transferEncryptionKey = deviceEncryptionKey;
+  const freshUser = db.prepare('SELECT circle_user_id FROM wallet_users WHERE email = ?').get(email);
+  if (freshUser?.circle_user_id && circleClient) {
+    try {
+      const freshTokenResp = await circleClient.createUserToken({ userId: freshUser.circle_user_id });
+      transferToken = freshTokenResp.data.userToken;
+      transferEncryptionKey = freshTokenResp.data.encryptionKey;
+      console.log('[prepare-unlock] Generated fresh userToken — old token replaced');
+    } catch (e) {
+      console.warn('[prepare-unlock] createUserToken failed, using provided deviceToken:', e.message);
+    }
+  }
+
+  // 6. Create the Circle transfer challenge
   const amount = (signal.price_usdc || 0.05).toFixed(4);
   const transferReq = {
+    userToken: transferToken,
     idempotencyKey: uuidv4(),
     amounts: [amount],
     destinationAddress: PLATFORM_WALLET,
     tokenAddress: USDC_TOKEN_ADDRESS,
     tokenBlockchain: circleBlockchain,
     walletId: circleWalletId,
-    feeLevel: 'HIGH',
+    fee: { type: 'level', config: { feeLevel: 'HIGH' } },
     refId: signalId,
   };
   console.log('[prepare-unlock] Creating Circle transfer challenge:', JSON.stringify(transferReq));
-
   try {
-    const challengeResp = await circleClient.createUserTransactionTransferChallenge(
-      deviceToken,
-      transferReq,
-    );
+    const challengeResp = await circleClient.createTransaction(transferReq);
     const { challengeId } = challengeResp.data;
     console.log('[prepare-unlock] Got challengeId:', challengeId);
 
-    return res.json({ challengeId, deviceToken, deviceEncryptionKey });
+    return res.json({ challengeId, deviceToken: transferToken, deviceEncryptionKey: transferEncryptionKey });
   } catch (e) {
     const msg = circleErr(e);
     console.error('[prepare-unlock] Circle createUserTransactionTransferChallenge error:', msg);
     return res.status(500).json({ error: `Circle transfer creation failed: ${msg}` });
+  }
+});
+
+// ── POST /api/wallet/refresh ───────────────────────────────────────────────
+// Generates a fresh userToken for the Circle user without requiring OTP.
+// Frontend calls this before prepare-unlock to avoid "userToken is invalid" errors.
+app.post('/api/wallet/refresh', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'email required' });
+  if (!circleClient) return res.status(503).json({ error: 'Circle not configured' });
+
+  const user = db.prepare('SELECT circle_user_id FROM wallet_users WHERE email = ?').get(email);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (!user.circle_user_id) {
+    return res.status(404).json({ error: 'No Circle user ID on file — reconnect wallet to register' });
+  }
+
+  try {
+    const tokenResp = await circleClient.createUserToken({ userId: user.circle_user_id });
+    const { userToken, encryptionKey } = tokenResp.data;
+    console.log('[wallet/refresh] Refreshed token for', email);
+    return res.json({ userToken, encryptionKey });
+  } catch (e) {
+    console.error('[wallet/refresh] Error:', circleErr(e));
+    return res.status(500).json({ error: `Failed to refresh session: ${circleErr(e)}` });
   }
 });
 

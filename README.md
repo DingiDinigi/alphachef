@@ -6,7 +6,7 @@
 
 [![Live](https://img.shields.io/badge/LIVE-alphachef.site-c9a227?style=for-the-badge)](https://alphachef.site)
 [![Circle UCW](https://img.shields.io/badge/Circle-UCW-blue?style=for-the-badge)](https://developers.circle.com)
-[![ETH Sepolia](https://img.shields.io/badge/Network-ETH--SEPOLIA-627eea?style=for-the-badge)](https://sepolia.etherscan.io)
+[![ARC Testnet](https://img.shields.io/badge/Network-ARC--TESTNET-c9a227?style=for-the-badge)](https://explorer.testnet.arc.fun)
 [![GitHub](https://img.shields.io/badge/GitHub-DingiDinigi%2Falphachef-white?style=for-the-badge&logo=github)](https://github.com/DingiDinigi/alphachef)
 
 ---
@@ -26,7 +26,7 @@ Signals are already cooking. Connect your Circle wallet with email OTP, get test
 | **Circle UCW nanopayments** | Real USDC transfers via Circle User Controlled Wallets — SDK approval required |
 | **Circle email OTP onboarding** | Email → Circle wallet in seconds, no seed phrase |
 | **Correct transfer approval flow** | `sdk.execute(challengeId)` → user approves in Circle iframe → transfer executes |
-| **Real-time on-chain data** | 8 autonomous signal sources, 5-min loop |
+| **Real-time on-chain data** | 8 autonomous signal sources, 30-min loop |
 | **Autonomous AI agent** | Groq LLM writes plain-English analysis 24/7 |
 | **Actual working demo** | Pay → approve in Circle → unlock in < 5s |
 | **Business model** | Signals priced $0.01–$0.05 USDC by confidence |
@@ -73,7 +73,7 @@ Signals are already cooking. Connect your Circle wallet with email OTP, get test
 | Backend | Node.js, Express, SQLite (better-sqlite3), WebSocket |
 | Wallet server | Node.js, Express — Circle UCW SDK server-side |
 | Agent | Node.js cron, Groq SDK (llama-3.3-70b) |
-| Payments | Circle User Controlled Wallets (UCW), USDC on ETH-SEPOLIA |
+| Payments | Circle User Controlled Wallets (UCW), USDC on ARC-TESTNET |
 | Fonts | Playfair Display + Inter + JetBrains Mono |
 | Process manager | PM2 |
 | Reverse proxy | nginx |
@@ -127,7 +127,7 @@ This is the only path that executes a real USDC transfer. The Circle SDK iframe 
 
 ## Autonomous Agent
 
-The agent runs every 5 minutes and monitors:
+The agent runs every 30 minutes and monitors:
 
 | # | Source | What It Detects |
 |---|--------|-----------------|
@@ -194,10 +194,10 @@ Required variables:
 CIRCLE_API_KEY=...
 CIRCLE_APP_ID=...              # from Circle developer console
 GROQ_API_KEY=...
-PLATFORM_WALLET=0x...          # receives USDC from signal unlocks
-USDC_TOKEN_ADDRESS=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238  # ETH-SEPOLIA USDC
+PLATFORM_WALLET=0x5b1704075058260e19692ad395b3ebdB4022453F  # receives USDC from signal unlocks
+CONTRACT_ADDRESS=0x722e0b499FedCE47a90Df7837405003B203dF417   # AlphaChef on Arc testnet
 AGENT_SECRET=your-secret-here
-ARC_RPC_URL=...                # optional: for on-chain balance checks
+ARC_RPC_URL=...                # Arc testnet RPC URL
 ```
 
 Also set in `frontend/.env`:
