@@ -335,41 +335,65 @@ app.post('/api/wallet/prepare-unlock', async (req, res) => {
     return res.status(500).json({ error: 'Platform wallet not configured (PLATFORM_WALLET env missing)' });
   }
 
-  // 5. Fetch the wallet's actual USDC tokenId from Circle.
-  //    Using tokenAddress+blockchain causes "insufficient funds" if Circle's internal
-  //    token registry uses a different address than what's stored on-chain. Using the
-  //    Circle tokenId from the wallet's balance list is always correct.
+  // 5. Resolve USDC tokenId for the transfer.
+  //    Strategy: wallet balance API first (has Circle's internal tokenId), then
+  //    Circle's token-list API (finds the registered USDC token even if the wallet
+  //    balance isn't indexed yet), then fall back to tokenAddress+blockchain.
+  //    Never fail early here — let Circle return the specific error if it can't execute.
   const amount = (signal.price_usdc || 0.05).toFixed(4);
   let usdcTokenId = null;
 
+  // 5a. Try wallet token balances (includeAll covers externally-received tokens)
   try {
     const balResp = await circleClient.getWalletTokenBalance({
       walletId: circleWalletId,
       userToken: deviceToken,
-      includeAll: false,
+      includeAll: true,
     });
     const tokenBalances = balResp.data?.tokenBalances || [];
-    console.log('[prepare-unlock] Circle token balances:', JSON.stringify(
-      tokenBalances.map(b => ({ symbol: b.token?.symbol, amount: b.amount, id: b.token?.id, addr: b.token?.tokenAddress }))
+    console.log('[prepare-unlock] Circle wallet balances (includeAll):', JSON.stringify(
+      tokenBalances.map(b => ({ sym: b.token?.symbol, amt: b.amount, id: b.token?.id, addr: b.token?.tokenAddress }))
     ));
-    const usdcBal = tokenBalances.find(b => b.token?.symbol?.toUpperCase() === 'USDC');
-    if (!usdcBal) {
-      const found = tokenBalances.map(b => b.token?.symbol || '?').join(', ') || 'none';
-      return res.status(402).json({ error: `No USDC found in Circle wallet (tokens: ${found}). Fund via Circle faucet.` });
+    const usdcBal = tokenBalances.find(b =>
+      b.token?.symbol?.toUpperCase().includes('USDC') ||
+      b.token?.name?.toUpperCase().includes('USD COIN')
+    );
+    if (usdcBal) {
+      usdcTokenId = usdcBal.token.id;
+      console.log('[prepare-unlock] tokenId from wallet balance:', usdcTokenId, 'balance:', usdcBal.amount);
     }
-    const circleUsdcBalance = parseFloat(usdcBal.amount || '0');
-    const required = parseFloat(amount);
-    if (circleUsdcBalance < required) {
-      return res.status(402).json({ error: `Insufficient USDC: Circle wallet has ${circleUsdcBalance.toFixed(2)}, need ${required.toFixed(2)}` });
-    }
-    usdcTokenId = usdcBal.token.id;
-    console.log('[prepare-unlock] Using USDC tokenId:', usdcTokenId, 'Circle balance:', circleUsdcBalance);
   } catch (e) {
     console.error('[prepare-unlock] getWalletTokenBalance error:', circleErr(e));
-    // Fall through to tokenAddress approach if balance fetch fails
   }
 
-  // 6. Create the Circle transfer challenge using the frontend-provided userToken.
+  // 5b. If wallet balance didn't have USDC, query Circle's token registry directly
+  if (!usdcTokenId) {
+    try {
+      const tResp = await fetch(
+        `https://api.circle.com/v1/w3s/tokens?blockchain=${encodeURIComponent(circleBlockchain)}&pageSize=50`,
+        { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } }
+      );
+      const tData = await tResp.json();
+      const tokens = tData?.data?.tokens || [];
+      console.log('[prepare-unlock] Circle token registry for', circleBlockchain, ':', JSON.stringify(
+        tokens.map(t => ({ sym: t.symbol, name: t.name, id: t.id, addr: t.tokenAddress }))
+      ));
+      const usdcToken = tokens.find(t =>
+        t.symbol?.toUpperCase() === 'USDC' ||
+        t.name?.toUpperCase().includes('USD COIN')
+      );
+      if (usdcToken?.id) {
+        usdcTokenId = usdcToken.id;
+        console.log('[prepare-unlock] tokenId from Circle registry:', usdcTokenId);
+      }
+    } catch (e) {
+      console.error('[prepare-unlock] token registry lookup error:', e.message);
+    }
+  }
+
+  console.log('[prepare-unlock] Final tokenSpec — tokenId:', usdcTokenId, 'blockchain:', circleBlockchain);
+
+  // 6. Create the Circle transfer challenge.
   const tokenSpec = usdcTokenId
     ? { tokenId: usdcTokenId }
     : { tokenAddress: usdcAddressForChain(circleBlockchain), blockchain: circleBlockchain };
