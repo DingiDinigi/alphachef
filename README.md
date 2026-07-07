@@ -121,7 +121,7 @@ This is the only path that executes a real USDC transfer. The Circle SDK iframe 
 |------|---------|-----|
 | **A (primary)** | Circle UCW | `circleConfirmed: true` after `sdk.execute()` |
 | **B** | MetaMask/Rabby | `message` + `tx_hash` signature verification |
-| **C (blocked)** | Password-only | Returns 400 `SDK_REQUIRED` — Circle transfers require SDK approval |
+
 
 ---
 
