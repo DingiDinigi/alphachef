@@ -7,6 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { ethers } = require('ethers');
 const { CircleUserControlledWalletsClient } = require('@circle-fin/user-controlled-wallets');
+const { initiateDeveloperControlledWalletsClient } = require('@circle-fin/developer-controlled-wallets');
 
 const app = express();
 app.use(cors());
@@ -52,17 +53,28 @@ const db = new Database(path.join(__dirname, 'alphachef.db'));
   }
 }
 
-for (const col of ['circle_wallet_id TEXT', 'circle_blockchain TEXT', 'password_hash TEXT', 'arc_wallet_id TEXT', 'arc_wallet_address TEXT']) {
+for (const col of [
+  'circle_wallet_id TEXT', 'circle_blockchain TEXT', 'password_hash TEXT',
+  'arc_wallet_id TEXT', 'arc_wallet_address TEXT', 'arc_wallet_set_id TEXT',
+]) {
   try { db.exec(`ALTER TABLE wallet_users ADD COLUMN ${col}`); } catch (_) {}
 }
 
-const apiKey = process.env.CIRCLE_API_KEY || '';
-const appId  = process.env.CIRCLE_APP_ID  || '';
+const apiKey       = process.env.CIRCLE_API_KEY       || '';
+const appId        = process.env.CIRCLE_APP_ID        || '';
+const entitySecret = process.env.CIRCLE_ENTITY_SECRET || '';
 console.log(`[wallet-server] CIRCLE_API_KEY: ${apiKey ? apiKey.slice(0, 8) + '…' : '(empty)'}`);
 console.log(`[wallet-server] CIRCLE_APP_ID: ${appId ? appId.slice(0, 8) + '…' : '(empty)'}`);
+console.log(`[wallet-server] CIRCLE_ENTITY_SECRET: ${entitySecret ? 'set' : '(empty)'}`);
 
+// UCW client — used only for email OTP (init endpoint)
 const circleClient = apiKey
   ? new CircleUserControlledWalletsClient({ apiKey })
+  : null;
+
+// DCW client — used for wallet creation and all transactions (no user PIN needed)
+const devClient = (apiKey && entitySecret)
+  ? initiateDeveloperControlledWalletsClient({ apiKey, entitySecret })
   : null;
 
 function circleErr(e) {
@@ -96,7 +108,7 @@ app.get('/api/wallet/config', (req, res) => {
 });
 
 // ── POST /api/wallet/init ──────────────────────────────────────────────────
-// Always sends OTP — returns deviceToken/challengeId for Circle SDK verifyOtp().
+// Sends OTP via Circle UCW — returns deviceToken/challengeId for SDK verifyOtp().
 app.post('/api/wallet/init', async (req, res) => {
   if (!circleClient) return res.status(503).json({ error: 'Circle not configured — check CIRCLE_API_KEY in .env' });
   const { email, deviceId } = req.body;
@@ -131,19 +143,19 @@ app.post('/api/wallet/init', async (req, res) => {
 
 // ── POST /api/wallet/confirm ───────────────────────────────────────────────
 // Called after verifyOtp() succeeds.
-// Fetches Circle wallets, finds or creates an ARC-TESTNET wallet, stores it.
+// Creates a developer-controlled ARC-TESTNET wallet for the user if none exists.
 app.post('/api/wallet/confirm', async (req, res) => {
-  const { email, deviceToken, deviceEncryptionKey } = req.body;
+  const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'email required' });
 
-  console.log('[wallet/confirm] email:', email, '| has deviceToken:', !!deviceToken);
+  console.log('[wallet/confirm] email:', email);
 
   db.prepare('INSERT OR IGNORE INTO wallet_users (id, email) VALUES (?, ?)').run(uuidv4(), email);
   const user = db.prepare('SELECT * FROM wallet_users WHERE email = ?').get(email);
 
-  // Already have an ARC-TESTNET wallet stored — return it immediately
+  // Already have a developer-controlled ARC-TESTNET wallet — return it
   if (user?.arc_wallet_id && user?.arc_wallet_address) {
-    console.log('[wallet/confirm] Returning user, ARC-TESTNET wallet stored:', user.arc_wallet_address);
+    console.log('[wallet/confirm] Returning user — DCW wallet:', user.arc_wallet_address);
     return res.json({
       walletAddress: user.arc_wallet_address,
       isExisting: true,
@@ -151,73 +163,50 @@ app.post('/api/wallet/confirm', async (req, res) => {
     });
   }
 
-  // Fetch all Circle wallets for this user
-  if (deviceToken && circleClient) {
-    try {
-      console.log('[wallet/confirm] Fetching Circle wallets...');
-      const walletsResp = await circleClient.listWallets({ userToken: deviceToken });
-      const wallets = walletsResp.data?.wallets || [];
-      console.log('[wallet/confirm] Circle wallets found:', wallets.length,
-        wallets.map(w => `${w.blockchain}:${w.address}`).join(', '));
-
-      // Find an existing ARC-TESTNET wallet
-      let arcWallet = wallets.find(w => w.blockchain === 'ARC-TESTNET');
-
-      // If none, create one in the same wallet set
-      if (!arcWallet && wallets.length > 0) {
-        const walletSetId = wallets[0].walletSetId;
-        console.log('[wallet/confirm] No ARC-TESTNET wallet — creating one in walletSetId:', walletSetId);
-        try {
-          const createResp = await circleClient.createWallets({
-            userToken: deviceToken,
-            blockchains: ['ARC-TESTNET'],
-            count: 1,
-            walletSetId,
-          });
-          const newWallets = createResp.data?.wallets || [];
-          arcWallet = newWallets.find(w => w.blockchain === 'ARC-TESTNET') || newWallets[0];
-          console.log('[wallet/confirm] Created ARC-TESTNET wallet:', arcWallet?.address);
-        } catch (e) {
-          console.error('[wallet/confirm] createWallets error:', circleErr(e));
-        }
-      }
-
-      const primaryWallet = arcWallet || wallets[0];
-      if (primaryWallet) {
-        const arcId   = arcWallet?.id      || (primaryWallet.blockchain === 'ARC-TESTNET' ? primaryWallet.id      : null);
-        const arcAddr = arcWallet?.address || (primaryWallet.blockchain === 'ARC-TESTNET' ? primaryWallet.address : null);
-        db.prepare(
-          'UPDATE wallet_users SET wallet_address = ?, circle_wallet_id = ?, circle_blockchain = ?, circle_user_id = ?, arc_wallet_id = ?, arc_wallet_address = ? WHERE email = ?'
-        ).run(primaryWallet.address, primaryWallet.id, primaryWallet.blockchain,
-              primaryWallet.userId || null, arcId, arcAddr, email);
-        const returnAddress = arcAddr || primaryWallet.address;
-        console.log('[wallet/confirm] Stored. ARC addr:', arcAddr, '| primary:', primaryWallet.address);
-        return res.json({
-          walletAddress: returnAddress,
-          isExisting: !!user.wallet_address,
-          hasPassword: !!user.password_hash,
-        });
-      }
-    } catch (e) {
-      console.error('[wallet/confirm] listWallets error:', circleErr(e));
-    }
+  if (!devClient) {
+    return res.status(503).json({ error: 'Developer wallet client not configured — check CIRCLE_ENTITY_SECRET in .env' });
   }
 
-  // Fallback: return previously stored address if any
-  if (user?.wallet_address) {
-    console.log('[wallet/confirm] Returning old wallet address:', user.wallet_address);
-    return res.json({ walletAddress: user.wallet_address, isExisting: true, hasPassword: !!user.password_hash });
-  }
+  try {
+    // Create a wallet set scoped to this user
+    console.log('[wallet/confirm] Creating DCW wallet set for', email);
+    const wsResp = await devClient.createWalletSet({
+      name: email,
+      idempotencyKey: uuidv4(),
+    });
+    const walletSetId = wsResp.data?.walletSet?.id;
+    if (!walletSetId) throw new Error('Circle returned no walletSetId');
+    console.log('[wallet/confirm] Wallet set created:', walletSetId);
 
-  // Last resort: placeholder
-  const generated = ethers.Wallet.createRandom();
-  db.prepare('UPDATE wallet_users SET wallet_address = ? WHERE email = ?').run(generated.address, email);
-  console.log('[wallet/confirm] WARN: No Circle wallet found — placeholder:', generated.address);
-  return res.json({ walletAddress: generated.address, isExisting: false, hasPassword: false });
+    // Create an EOA wallet on ARC-TESTNET in that set
+    const wResp = await devClient.createWallets({
+      walletSetId,
+      blockchains: ['ARC-TESTNET'],
+      count: 1,
+      accountType: 'EOA',
+      idempotencyKey: uuidv4(),
+    });
+    const wallets = wResp.data?.wallets || [];
+    const arcWallet = wallets.find(w => w.blockchain === 'ARC-TESTNET') || wallets[0];
+    if (!arcWallet) throw new Error('Circle returned no wallets');
+    console.log('[wallet/confirm] DCW wallet created:', arcWallet.address, arcWallet.id);
+
+    db.prepare(
+      'UPDATE wallet_users SET wallet_address = ?, arc_wallet_id = ?, arc_wallet_address = ?, arc_wallet_set_id = ? WHERE email = ?'
+    ).run(arcWallet.address, arcWallet.id, arcWallet.address, walletSetId, email);
+
+    return res.json({
+      walletAddress: arcWallet.address,
+      isExisting: false,
+      hasPassword: !!user.password_hash,
+    });
+  } catch (e) {
+    console.error('[wallet/confirm] DCW wallet creation error:', circleErr(e));
+    return res.status(500).json({ error: `Wallet creation failed: ${circleErr(e)}` });
+  }
 });
 
 // ── POST /api/wallet/set-password ─────────────────────────────────────────
-// Sets or updates the spend password for an account.
 app.post('/api/wallet/set-password', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'email and password required' });
@@ -233,7 +222,6 @@ app.post('/api/wallet/set-password', async (req, res) => {
 });
 
 // ── POST /api/wallet/verify-password ──────────────────────────────────────
-// Verifies spend password before allowing a signal unlock.
 app.post('/api/wallet/verify-password', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'email and password required' });
@@ -247,42 +235,24 @@ app.post('/api/wallet/verify-password', async (req, res) => {
 });
 
 // ── POST /api/wallet/prepare-unlock ───────────────────────────────────────
-// Step 1 of the Circle transfer flow:
-//   1. Verify spend password
-//   2. Create a USDC transfer challenge on Circle (server-side)
-//   3. Return {challengeId, deviceToken, deviceEncryptionKey} to frontend
-// The frontend must then call sdk.execute(challengeId) for user approval,
-// then POST /api/unlock to record the unlock after Circle confirms.
+// Developer-controlled flow — backend signs and submits the USDC transfer
+// server-side using the entity secret. No Circle modal or user PIN needed.
+// Records the unlock in the DB immediately and returns alreadyUnlocked:true
+// so the frontend skips the Circle SDK step and shows the signal directly.
 const PLATFORM_WALLET = process.env.PLATFORM_WALLET || '';
 
-// USDC contract address on ARC-TESTNET. Used as last-resort fallback if Circle's
-// token registry lookup fails to find a tokenId dynamically.
-const USDC_BY_CHAIN = {
-  'ARC-TESTNET': process.env.ARC_USDC_ADDRESS || '0x3600000000000000000000000000000000000000',
-};
-function usdcAddressForChain(blockchain) {
-  return USDC_BY_CHAIN[blockchain] || USDC_BY_CHAIN['ARC-TESTNET'];
-}
-
 app.post('/api/wallet/prepare-unlock', async (req, res) => {
-  const { email, signalId, walletAddress, password, deviceToken, deviceEncryptionKey } = req.body;
+  const { email, signalId, walletAddress, password } = req.body;
 
   console.log('[prepare-unlock] START —', {
     email: email ? email.slice(0, 8) + '…' : '(missing)',
     signalId: signalId || '(missing)',
     walletAddress: walletAddress ? walletAddress.slice(0, 10) + '…' : '(missing)',
     has_password: !!password,
-    has_deviceToken: !!deviceToken,
   });
 
   if (!email || !signalId || !walletAddress || !password) {
     return res.status(400).json({ error: 'Missing required fields: email, signalId, walletAddress, password' });
-  }
-  if (!deviceToken) {
-    return res.status(401).json({
-      error: 'Session expired — please reconnect your Circle wallet to unlock signals.',
-      code: 'SESSION_EXPIRED',
-    });
   }
 
   // 1. Verify spend password
@@ -298,7 +268,7 @@ app.post('/api/wallet/prepare-unlock', async (req, res) => {
   }
   console.log('[prepare-unlock] Password verified for', email);
 
-  // 2. Get signal details (shared SQLite DB with server.js)
+  // 2. Get signal
   const signal = db.prepare('SELECT * FROM signals WHERE id = ?').get(signalId);
   if (!signal) return res.status(404).json({ error: 'Signal not found' });
 
@@ -307,65 +277,36 @@ app.post('/api/wallet/prepare-unlock', async (req, res) => {
     'SELECT id FROM unlocks WHERE signal_id = ? AND LOWER(wallet_address) = LOWER(?)'
   ).get(signalId, walletAddress);
   if (alreadyUnlocked) {
-    console.log('[prepare-unlock] Signal already unlocked — skipping Circle challenge');
+    console.log('[prepare-unlock] Already unlocked');
     return res.json({ alreadyUnlocked: true });
   }
 
-  // 4. Ensure we have an ARC-TESTNET wallet ID (prefer arc_wallet_id, fall back to circle_wallet_id)
-  let circleWalletId = user.arc_wallet_id || user.circle_wallet_id;
-  let circleBlockchain = user.arc_wallet_id ? 'ARC-TESTNET' : (user.circle_blockchain || 'ARC-TESTNET');
-
-  if (!circleWalletId && circleClient) {
-    console.log('[prepare-unlock] wallet id missing — fetching from Circle via deviceToken');
-    try {
-      const walletsResp = await circleClient.listWallets({ userToken: deviceToken });
-      const wallets = walletsResp.data?.wallets || [];
-      console.log('[prepare-unlock] Circle wallets:', wallets.map(w => `${w.blockchain}:${w.address}`).join(', '));
-      const arcWallet = wallets.find(w => w.blockchain === 'ARC-TESTNET') || wallets[0];
-      if (arcWallet) {
-        circleWalletId = arcWallet.id;
-        circleBlockchain = arcWallet.blockchain;
-        const arcId   = arcWallet.blockchain === 'ARC-TESTNET' ? arcWallet.id      : null;
-        const arcAddr = arcWallet.blockchain === 'ARC-TESTNET' ? arcWallet.address : null;
-        db.prepare(
-          'UPDATE wallet_users SET circle_wallet_id = ?, circle_blockchain = ?, wallet_address = ?, circle_user_id = ?, arc_wallet_id = ?, arc_wallet_address = ? WHERE email = ?'
-        ).run(arcWallet.id, arcWallet.blockchain, arcWallet.address, arcWallet.userId || null, arcId, arcAddr, email);
-        console.log('[prepare-unlock] Stored wallet:', circleWalletId, circleBlockchain);
-      }
-    } catch (e) {
-      console.error('[prepare-unlock] listWallets error:', circleErr(e));
-    }
-  }
-
-  if (!circleWalletId) {
+  // 4. Require developer-controlled ARC-TESTNET wallet
+  if (!user.arc_wallet_id) {
     return res.status(400).json({
-      error: 'No Circle wallet found — please reconnect your wallet so Circle can create it.',
-      code: 'NO_CIRCLE_WALLET',
+      error: 'No ARC-TESTNET wallet found — please reconnect your wallet.',
+      code: 'NO_ARC_WALLET',
     });
   }
-
+  if (!devClient) {
+    return res.status(503).json({ error: 'Developer wallet client not configured' });
+  }
   if (!PLATFORM_WALLET) {
     return res.status(500).json({ error: 'Platform wallet not configured (PLATFORM_WALLET env missing)' });
   }
 
-  // 5. Resolve USDC tokenId for the transfer.
-  //    Strategy: wallet balance API first (has Circle's internal tokenId), then
-  //    Circle's token-list API (finds the registered USDC token even if the wallet
-  //    balance isn't indexed yet), then fall back to tokenAddress+blockchain.
-  //    Never fail early here — let Circle return the specific error if it can't execute.
   const amount = (signal.price_usdc || 0.05).toFixed(4);
   let usdcTokenId = null;
 
-  // 5a. Try wallet token balances (includeAll covers externally-received tokens)
+  // 5a. Get USDC tokenId from wallet token balance
   try {
-    const balResp = await circleClient.getWalletTokenBalance({
-      walletId: circleWalletId,
-      userToken: deviceToken,
+    const balResp = await devClient.getWalletTokenBalance({
+      id: user.arc_wallet_id,
       includeAll: true,
     });
     const tokenBalances = balResp.data?.tokenBalances || [];
-    console.log('[prepare-unlock] Circle wallet balances (includeAll):', JSON.stringify(
-      tokenBalances.map(b => ({ sym: b.token?.symbol, amt: b.amount, id: b.token?.id, addr: b.token?.tokenAddress }))
+    console.log('[prepare-unlock] DCW wallet balances:', JSON.stringify(
+      tokenBalances.map(b => ({ sym: b.token?.symbol, amt: b.amount, id: b.token?.id }))
     ));
     const usdcBal = tokenBalances.find(b =>
       b.token?.symbol?.toUpperCase().includes('USDC') ||
@@ -373,23 +314,23 @@ app.post('/api/wallet/prepare-unlock', async (req, res) => {
     );
     if (usdcBal) {
       usdcTokenId = usdcBal.token.id;
-      console.log('[prepare-unlock] tokenId from wallet balance:', usdcTokenId, 'balance:', usdcBal.amount);
+      console.log('[prepare-unlock] tokenId from balance:', usdcTokenId, 'amount:', usdcBal.amount);
     }
   } catch (e) {
     console.error('[prepare-unlock] getWalletTokenBalance error:', circleErr(e));
   }
 
-  // 5b. If wallet balance didn't have USDC, query Circle's token registry directly
+  // 5b. Fall back to Circle token registry
   if (!usdcTokenId) {
     try {
       const tResp = await fetch(
-        `https://api.circle.com/v1/w3s/tokens?blockchain=${encodeURIComponent(circleBlockchain)}&pageSize=50`,
+        'https://api.circle.com/v1/w3s/tokens?blockchain=ARC-TESTNET&pageSize=50',
         { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } }
       );
       const tData = await tResp.json();
       const tokens = tData?.data?.tokens || [];
-      console.log('[prepare-unlock] Circle token registry for', circleBlockchain, ':', JSON.stringify(
-        tokens.map(t => ({ sym: t.symbol, name: t.name, id: t.id, addr: t.tokenAddress }))
+      console.log('[prepare-unlock] Token registry ARC-TESTNET:', JSON.stringify(
+        tokens.map(t => ({ sym: t.symbol, id: t.id }))
       ));
       const usdcToken = tokens.find(t =>
         t.symbol?.toUpperCase() === 'USDC' ||
@@ -397,97 +338,80 @@ app.post('/api/wallet/prepare-unlock', async (req, res) => {
       );
       if (usdcToken?.id) {
         usdcTokenId = usdcToken.id;
-        console.log('[prepare-unlock] tokenId from Circle registry:', usdcTokenId);
+        console.log('[prepare-unlock] tokenId from registry:', usdcTokenId);
       }
     } catch (e) {
-      console.error('[prepare-unlock] token registry lookup error:', e.message);
+      console.error('[prepare-unlock] token registry error:', e.message);
     }
   }
 
-  console.log('[prepare-unlock] Final tokenSpec — tokenId:', usdcTokenId, 'blockchain:', circleBlockchain);
+  if (!usdcTokenId) {
+    return res.status(402).json({
+      error: 'No USDC found in ARC-TESTNET wallet. Fund via https://faucet.circle.com/ selecting ARC network.',
+    });
+  }
 
-  // 6. Create the Circle transfer challenge.
-  const tokenSpec = usdcTokenId
-    ? { tokenId: usdcTokenId }
-    : { tokenAddress: usdcAddressForChain(circleBlockchain), blockchain: circleBlockchain };
-
-  const transferReq = {
-    userToken: deviceToken,
-    idempotencyKey: uuidv4(),
-    amounts: [amount],
-    destinationAddress: PLATFORM_WALLET,
-    ...tokenSpec,
-    walletId: circleWalletId,
-    fee: { type: 'level', config: { feeLevel: 'HIGH' } },
-    refId: signalId,
-  };
-  console.log('[prepare-unlock] Creating Circle transfer challenge:', JSON.stringify(transferReq));
+  // 6. Submit transfer — signed server-side via entity secret, no user approval modal
+  const idempotencyKey = uuidv4();
+  console.log('[prepare-unlock] Submitting DCW transfer:', {
+    walletId: user.arc_wallet_id, amount, tokenId: usdcTokenId, to: PLATFORM_WALLET,
+  });
   try {
-    const challengeResp = await circleClient.createTransaction(transferReq);
-    const { challengeId } = challengeResp.data;
-    console.log('[prepare-unlock] Got challengeId:', challengeId);
+    const txResp = await devClient.createTransaction({
+      walletId: user.arc_wallet_id,
+      amounts: [amount],
+      destinationAddress: PLATFORM_WALLET,
+      tokenId: usdcTokenId,
+      fee: { type: 'level', config: { feeLevel: 'HIGH' } },
+      idempotencyKey,
+      refId: signalId,
+    });
+    const transactionId = txResp.data?.id || txResp.data?.transaction?.id || idempotencyKey;
+    console.log('[prepare-unlock] DCW transaction submitted:', transactionId);
 
-    return res.json({ challengeId, deviceToken, deviceEncryptionKey });
+    // 7. Record unlock immediately (transaction is queued; optimistic)
+    db.prepare(
+      'INSERT OR IGNORE INTO unlocks (id, signal_id, wallet_address, tx_hash, amount_usdc) VALUES (?, ?, ?, ?, ?)'
+    ).run(uuidv4(), signalId, walletAddress, `dcw:${transactionId}`, Number(amount));
+    console.log('[prepare-unlock] Unlock recorded — signal', signalId);
+
+    return res.json({ alreadyUnlocked: true });
   } catch (e) {
     const msg = circleErr(e);
-    console.error('[prepare-unlock] Circle createTransaction error:', msg);
-    // "userToken is invalid" / "userToken had expired" → must re-authenticate
-    if (msg.toLowerCase().includes('usertoken')) {
-      return res.status(401).json({
-        error: 'Circle session expired — please reconnect your wallet.',
-        code: 'SESSION_EXPIRED',
-      });
-    }
-    return res.status(500).json({ error: `Circle transfer creation failed: ${msg}` });
+    console.error('[prepare-unlock] DCW createTransaction error:', msg);
+    return res.status(500).json({ error: `Transfer failed: ${msg}` });
   }
 });
 
 // ── POST /api/wallet/refresh ───────────────────────────────────────────────
-// No-op for Circle email-auth users: createUserToken only works for PIN-auth
-// users, not EMAIL-auth users.  Returns refreshFailed so the frontend falls
-// back to the stored deviceToken and, if expired, shows the reconnect prompt.
 app.post('/api/wallet/refresh', (req, res) => {
   res.json({ refreshFailed: true, reason: 'email_auth_not_supported' });
 });
 
 // ── GET /api/wallet/balance ────────────────────────────────────────────────
-// RPC and USDC address per blockchain. The Circle wallet's actual blockchain
-// (stored in circle_blockchain) determines which chain to query.
-const CHAIN_CONFIG = {
-  'ARC-TESTNET': {
-    rpc:  process.env.ARC_RPC_URL,
-    usdc: process.env.ARC_USDC_ADDRESS || '0x3600000000000000000000000000000000000000',
-  },
-};
-
-async function getOnChainUsdcBalance(walletAddress, blockchain) {
-  const chain = CHAIN_CONFIG[blockchain] || CHAIN_CONFIG['ARC-TESTNET'];
-  if (!chain.rpc) throw new Error(`No RPC configured for ${blockchain}`);
-  const calldata = '0x70a08231' + walletAddress.slice(2).toLowerCase().padStart(64, '0');
-  const resp = await fetch(chain.rpc, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_call', params: [{ to: chain.usdc, data: calldata }, 'latest'], id: 1 }),
-  });
-  const json = await resp.json();
-  const hex = json.result || '0x0';
-  return Number(BigInt(hex)) / 1e6;
-}
-
+// Uses DCW getWalletTokenBalance for live ARC-TESTNET USDC balance.
 app.get('/api/wallet/balance', async (req, res) => {
   const { email } = req.query;
   if (!email) return res.json({ balance: '0' });
-  const user = db.prepare('SELECT wallet_address, circle_blockchain, arc_wallet_id, arc_wallet_address FROM wallet_users WHERE email = ?').get(email);
-  const walletAddr = user?.arc_wallet_address || user?.wallet_address;
-  if (!walletAddr) return res.json({ balance: '0' });
-  const blockchain = user?.arc_wallet_id ? 'ARC-TESTNET' : (user?.circle_blockchain || 'ARC-TESTNET');
+  const user = db.prepare('SELECT arc_wallet_id, arc_wallet_address FROM wallet_users WHERE email = ?').get(email);
+  if (!user?.arc_wallet_id || !devClient) return res.json({ balance: '0' });
+
   try {
-    const balance = await getOnChainUsdcBalance(walletAddr, blockchain);
-    console.log(`[balance] ${email} — ${blockchain} — ${balance} USDC`);
-    res.json({ balance: balance.toFixed(6), walletAddress: walletAddr, blockchain });
+    const balResp = await devClient.getWalletTokenBalance({
+      id: user.arc_wallet_id,
+      includeAll: true,
+    });
+    const tokenBalances = balResp.data?.tokenBalances || [];
+    const usdcBal = tokenBalances.find(b =>
+      b.token?.symbol?.toUpperCase().includes('USDC') ||
+      b.token?.name?.toUpperCase().includes('USD COIN')
+    );
+    const balance = usdcBal?.amount || '0';
+    console.log(`[balance] ${email} — ARC-TESTNET — ${balance} USDC`);
+    res.json({ balance, walletAddress: user.arc_wallet_address, blockchain: 'ARC-TESTNET' });
   } catch (e) {
     console.error('[balance] error:', e.message);
-    res.json({ balance: '0', walletAddress: walletAddr, blockchain });
+    res.json({ balance: '0', walletAddress: user.arc_wallet_address, blockchain: 'ARC-TESTNET' });
   }
 });
 
