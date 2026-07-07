@@ -74,13 +74,15 @@ export default function PasswordUnlockModal({ email, signal, onSuccess, onClose 
     setState('requesting');
 
     // ── Step 0: Refresh Circle session to avoid "userToken is invalid" ────────
+    // Pass the current deviceToken so the server can backfill circle_user_id
+    // for existing users who connected before we started storing it.
     let freshDeviceToken = session.deviceToken;
     let freshEncryptionKey = session.deviceEncryptionKey;
     try {
       const refreshResp = await fetch('/api/wallet/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, deviceToken: session.deviceToken }),
       });
       if (refreshResp.ok) {
         const refreshData = await refreshResp.json();
@@ -93,11 +95,13 @@ export default function PasswordUnlockModal({ email, signal, onSuccess, onClose 
             email,
             storedAt: Date.now(),
           }));
-          console.log('[PasswordUnlockModal] Step 0: Session refreshed successfully');
+          console.log('[PasswordUnlockModal] Step 0: Session refreshed with fresh server token');
+        } else if (refreshData.refreshFailed) {
+          console.log('[PasswordUnlockModal] Step 0: Refresh not possible (no circle_user_id), using cached token');
         }
       }
     } catch (_) {
-      console.log('[PasswordUnlockModal] Step 0: Token refresh failed, using cached token');
+      console.log('[PasswordUnlockModal] Step 0: Token refresh call failed, using cached token');
     }
 
     console.log('[PasswordUnlockModal] Step 1: Calling prepare-unlock for signal:', signal.id);
