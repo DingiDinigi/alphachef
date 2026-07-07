@@ -325,46 +325,13 @@ app.post('/api/wallet/prepare-unlock', async (req, res) => {
     return res.status(500).json({ error: 'Platform wallet not configured (PLATFORM_WALLET env missing)' });
   }
 
-  // 5. Backfill circle_user_id for existing users who don't have it yet.
-  //    circle_user_id is needed to generate a fresh token (createUserToken).
-  //    We only reach here with a valid circleWalletId, so if circle_user_id is
-  //    missing it means the user connected before we started storing it — fetch
-  //    it now while the deviceToken may still be valid.
-  if (!user.circle_user_id && circleClient && deviceToken) {
-    try {
-      const wResp = await circleClient.listWallets({ userToken: deviceToken });
-      const ws = wResp.data?.wallets || [];
-      if (ws.length > 0 && ws[0].userId) {
-        db.prepare('UPDATE wallet_users SET circle_user_id = ? WHERE email = ?').run(ws[0].userId, email);
-        console.log('[prepare-unlock] Backfilled circle_user_id:', ws[0].userId);
-      }
-    } catch (e) {
-      console.warn('[prepare-unlock] Backfill circle_user_id failed:', e.message);
-    }
-  }
-
-  // 6. Generate a fresh userToken — the stored deviceToken may have expired.
-  //    createUserToken(circle_user_id) is the only reliable server-side token.
-  let transferToken = deviceToken;
-  let transferEncryptionKey = deviceEncryptionKey;
-  const freshUser = db.prepare('SELECT circle_user_id FROM wallet_users WHERE email = ?').get(email);
-  if (freshUser?.circle_user_id && circleClient) {
-    try {
-      const freshTokenResp = await circleClient.createUserToken({ userId: freshUser.circle_user_id });
-      transferToken = freshTokenResp.data.userToken;
-      transferEncryptionKey = freshTokenResp.data.encryptionKey;
-      console.log('[prepare-unlock] Generated fresh userToken — old token replaced');
-    } catch (e) {
-      console.warn('[prepare-unlock] createUserToken failed, using provided deviceToken:', e.message);
-    }
-  } else {
-    console.warn('[prepare-unlock] No circle_user_id — using raw deviceToken (may fail if expired)');
-  }
-
-  // 6. Create the Circle transfer challenge
+  // 5. Create the Circle transfer challenge using the frontend-provided deviceToken.
+  //    Circle email-auth users (authMode: EMAIL) cannot use createUserToken — that
+  //    API only works for PIN-based users.  The deviceToken from the OTP session IS
+  //    the userToken; if it has expired the user must reconnect their wallet.
   const amount = (signal.price_usdc || 0.05).toFixed(4);
   const transferReq = {
-    userToken: transferToken,
+    userToken: deviceToken,
     idempotencyKey: uuidv4(),
     amounts: [amount],
     destinationAddress: PLATFORM_WALLET,
@@ -380,56 +347,27 @@ app.post('/api/wallet/prepare-unlock', async (req, res) => {
     const { challengeId } = challengeResp.data;
     console.log('[prepare-unlock] Got challengeId:', challengeId);
 
-    return res.json({ challengeId, deviceToken: transferToken, deviceEncryptionKey: transferEncryptionKey });
+    return res.json({ challengeId, deviceToken, deviceEncryptionKey });
   } catch (e) {
     const msg = circleErr(e);
-    console.error('[prepare-unlock] Circle createUserTransactionTransferChallenge error:', msg);
+    console.error('[prepare-unlock] Circle createTransaction error:', msg);
+    // "userToken is invalid" / "userToken had expired" → must re-authenticate
+    if (msg.toLowerCase().includes('usertoken')) {
+      return res.status(401).json({
+        error: 'Circle session expired — please reconnect your wallet.',
+        code: 'SESSION_EXPIRED',
+      });
+    }
     return res.status(500).json({ error: `Circle transfer creation failed: ${msg}` });
   }
 });
 
 // ── POST /api/wallet/refresh ───────────────────────────────────────────────
-// Generates a fresh userToken for the Circle user without requiring OTP.
-// Frontend calls this before prepare-unlock to avoid "userToken is invalid" errors.
-app.post('/api/wallet/refresh', async (req, res) => {
-  const { email, deviceToken } = req.body;
-  if (!email) return res.status(400).json({ error: 'email required' });
-  if (!circleClient) return res.status(503).json({ error: 'Circle not configured' });
-
-  let user = db.prepare('SELECT circle_user_id FROM wallet_users WHERE email = ?').get(email);
-  if (!user) return res.status(404).json({ error: 'User not found' });
-
-  // If circle_user_id is missing, try to backfill it using the deviceToken
-  if (!user.circle_user_id && deviceToken) {
-    try {
-      const wResp = await circleClient.listWallets({ userToken: deviceToken });
-      const ws = wResp.data?.wallets || [];
-      if (ws.length > 0 && ws[0].userId) {
-        db.prepare('UPDATE wallet_users SET circle_user_id = ? WHERE email = ?').run(ws[0].userId, email);
-        user = { ...user, circle_user_id: ws[0].userId };
-        console.log('[wallet/refresh] Backfilled circle_user_id via listWallets:', ws[0].userId);
-      }
-    } catch (e) {
-      console.warn('[wallet/refresh] listWallets backfill failed:', e.message);
-    }
-  }
-
-  if (!user.circle_user_id) {
-    // No way to refresh — the user's sessionStorage token may still be valid;
-    // return a soft failure so the frontend falls back to the stored deviceToken.
-    console.warn('[wallet/refresh] No circle_user_id for', email, '— cannot refresh');
-    return res.status(200).json({ refreshFailed: true, reason: 'no_circle_user_id' });
-  }
-
-  try {
-    const tokenResp = await circleClient.createUserToken({ userId: user.circle_user_id });
-    const { userToken, encryptionKey } = tokenResp.data;
-    console.log('[wallet/refresh] Refreshed token for', email);
-    return res.json({ userToken, encryptionKey });
-  } catch (e) {
-    console.error('[wallet/refresh] Error:', circleErr(e));
-    return res.status(500).json({ error: `Failed to refresh session: ${circleErr(e)}` });
-  }
+// No-op for Circle email-auth users: createUserToken only works for PIN-auth
+// users, not EMAIL-auth users.  Returns refreshFailed so the frontend falls
+// back to the stored deviceToken and, if expired, shows the reconnect prompt.
+app.post('/api/wallet/refresh', (req, res) => {
+  res.json({ refreshFailed: true, reason: 'email_auth_not_supported' });
 });
 
 // ── GET /api/wallet/balance ────────────────────────────────────────────────
