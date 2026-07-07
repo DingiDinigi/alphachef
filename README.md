@@ -5,8 +5,8 @@
 **The autonomous on-chain alpha signal platform where AI chefs cook signals 24/7 and you pay USDC to eat.**
 
 [![Live](https://img.shields.io/badge/LIVE-alphachef.site-c9a227?style=for-the-badge)](https://alphachef.site)
-[![Circle UCW](https://img.shields.io/badge/Circle-UCW-blue?style=for-the-badge)](https://developers.circle.com)
-[![ARC Testnet](https://img.shields.io/badge/Network-ARC--TESTNET-c9a227?style=for-the-badge)](https://explorer.testnet.arc.fun)
+[![Circle DCW](https://img.shields.io/badge/Circle-Developer--Controlled_Wallets-blue?style=for-the-badge)](https://developers.circle.com)
+[![ARC Testnet](https://img.shields.io/badge/Network-ARC--TESTNET-c9a227?style=for-the-badge)](https://testnet.arcscan.app)
 [![GitHub](https://img.shields.io/badge/GitHub-DingiDinigi%2Falphachef-white?style=for-the-badge&logo=github)](https://github.com/DingiDinigi/alphachef)
 
 ---
@@ -15,7 +15,7 @@
 
 **[https://alphachef.site](https://alphachef.site)**
 
-Signals are already cooking. Connect your Circle wallet with email OTP, get test USDC from the Circle faucet, and pay to unlock full analysis.
+Signals are already cooking. Connect your wallet with email OTP, fund it with test USDC from the Circle faucet (select ARC network), and pay to unlock full analysis.
 
 ---
 
@@ -23,13 +23,13 @@ Signals are already cooking. Connect your Circle wallet with email OTP, get test
 
 | Criteria | AlphaChef |
 |----------|-------------|
-| **Circle UCW nanopayments** | Real USDC transfers via Circle User Controlled Wallets — SDK approval required |
-| **Circle email OTP onboarding** | Email → Circle wallet in seconds, no seed phrase |
-| **Correct transfer approval flow** | `sdk.execute(challengeId)` → user approves in Circle iframe → transfer executes |
+| **Circle Developer-Controlled Wallets** | Real USDC transfers on ARC-TESTNET — backend signs via entity secret, instant settlement |
+| **Circle email OTP onboarding** | Email → ARC-TESTNET wallet in seconds, no seed phrase, no MetaMask |
+| **Frictionless payments** | No approval modal — spend password verifies intent, transfer executes server-side |
 | **Real-time on-chain data** | 8 autonomous signal sources, 30-min loop |
-| **Autonomous AI agent** | Groq LLM writes plain-English analysis 24/7 |
-| **Actual working demo** | Pay → approve in Circle → unlock in < 5s |
-| **Business model** | Signals priced $0.01–$0.05 USDC by confidence |
+| **Autonomous AI agent** | Groq LLM (llama-3.3-70b) writes plain-English analysis 24/7 |
+| **Actual working demo** | Enter password → USDC debited → signal unlocked in < 2s |
+| **Business model** | Signals priced $0.01–$0.05 USDC by confidence tier |
 | **Production design** | Premium dark theme, animated 3D globe, gold glow effects |
 
 ---
@@ -68,12 +68,12 @@ Signals are already cooking. Connect your Circle wallet with email OTP, get test
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React 19, Vite, TailwindCSS |
+| Frontend | React 19, Vite |
 | Animations | Canvas 2D (3D wireframe globe with depth shading + gold glow) |
 | Backend | Node.js, Express, SQLite (better-sqlite3), WebSocket |
-| Wallet server | Node.js, Express — Circle UCW SDK server-side |
+| Wallet server | Node.js, Express — Circle UCW (email OTP) + Circle DCW (wallet creation + transfers) |
 | Agent | Node.js cron, Groq SDK (llama-3.3-70b) |
-| Payments | Circle User Controlled Wallets (UCW), USDC on ARC-TESTNET |
+| Payments | Circle Developer-Controlled Wallets, USDC on ARC-TESTNET |
 | Fonts | Playfair Display + Inter + JetBrains Mono |
 | Process manager | PM2 |
 | Reverse proxy | nginx |
@@ -83,45 +83,45 @@ Signals are already cooking. Connect your Circle wallet with email OTP, get test
 ## Circle Wallet Flow
 
 ### Connect (new user)
+
 ```
 1. User enters email in WalletModal
-2. Backend (wallet-server) calls createDeviceTokenForEmailLogin
-   → returns deviceToken + deviceEncryptionKey
-3. Frontend stores {deviceToken, deviceEncryptionKey} in sessionStorage (23h window)
-4. SDK shows Circle OTP iframe — user enters code from email
-5. On success: backend calls listWallets → stores real circle_wallet_id + wallet_address in DB
-6. User sees wallet connected in nav
+2. wallet-server calls createDeviceTokenForEmailLogin (Circle UCW)
+   → returns deviceToken + OTP challengeId
+3. Circle SDK shows OTP iframe — user enters code from email
+4. On OTP success: wallet-server calls:
+     devClient.createWalletSet({ name: email })
+     devClient.createWallets({ blockchains: ['ARC-TESTNET'], count: 1, accountType: 'EOA' })
+5. ARC-TESTNET wallet address stored in DB (arc_wallet_id, arc_wallet_address)
+6. User prompted to set a spend password (pbkdf2-hashed in DB)
+7. User funds wallet via https://faucet.circle.com/ (select ARC network)
 ```
 
 ### Unlock a signal (paying with USDC)
+
 ```
 1. User clicks "Unlock Signal" — PasswordUnlockModal opens
-2. User enters spend password
-   — frontend reads {deviceToken, deviceEncryptionKey} from sessionStorage
+2. User enters their spend password
 3. POST /api/wallet/prepare-unlock:
    - Verifies spend password against pbkdf2 hash in DB
-   - Calls Circle createUserTransactionTransferChallenge → gets challengeId
-4. Frontend calls sdk.execute(challengeId)
-   → Circle shows transfer approval iframe to user
-5. User approves the USDC transfer in Circle
-6. SDK callback fires with result
-7. POST /api/unlock with {circleConfirmed: true, circleTransferId}
-8. Backend records unlock in DB → returns full signal
+   - Calls devClient.getWalletTokenBalance to find USDC tokenId on ARC-TESTNET
+   - Calls devClient.createTransaction({ walletId: arc_wallet_id, tokenId, amount, ... })
+     → transfer signed server-side via entity secret — no user approval modal
+   - Records unlock in DB immediately (tx_hash: "dcw:{transactionId}")
+   - Returns { alreadyUnlocked: true }
+4. Frontend shows the unlocked signal content
 ```
 
-This is the only path that executes a real USDC transfer. The Circle SDK iframe is mandatory.
+The entity secret signs transfers entirely server-side. The spend password is the user's consent mechanism — no Circle SDK `execute()` call during unlock.
 
 ---
 
 ## Signal Unlock Paths
 
-`/api/unlock` supports three paths:
-
 | Path | Trigger | How |
 |------|---------|-----|
-| **A (primary)** | Circle UCW | `circleConfirmed: true` after `sdk.execute()` |
-| **B** | MetaMask/Rabby | `message` + `tx_hash` signature verification |
-
+| **A (primary)** | Circle DCW | `prepare-unlock` submits transfer + records unlock server-side |
+| **B (legacy)** | MetaMask/Rabby | `message` + `tx_hash` signature verification via `/api/unlock` |
 
 ---
 
@@ -156,7 +156,7 @@ The agent runs every 30 minutes and monitors:
 |----------|--------|-------------|
 | `/api/signals` | GET | All signals (teaser only unless `?wallet=0x...`) |
 | `/api/signals/:id` | GET | Full signal if `?wallet=0x...` has unlocked |
-| `/api/unlock` | POST | Record unlock after Circle SDK approval |
+| `/api/unlock` | POST | Record MetaMask unlock (legacy path B) |
 | `/api/stats` | GET | Platform statistics (signals, unlocks, revenue) |
 | `/api/logs` | POST | Agent log ingestion (agent-secret required) |
 
@@ -166,10 +166,27 @@ WebSocket: `ws://alphachef.site/ws` — real-time push on `new_signal` and `sign
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/wallet/init-otp` | POST | Start email OTP — returns deviceToken + deviceEncryptionKey |
-| `/api/wallet/confirm-otp` | POST | After OTP: store wallet_address + circle_wallet_id |
+| `/api/wallet/config` | GET | Returns Circle App ID for frontend SDK init |
+| `/api/wallet/init` | POST | Start email OTP — returns deviceToken + challengeId |
+| `/api/wallet/confirm` | POST | After OTP: create DCW ARC-TESTNET wallet, return address |
 | `/api/wallet/set-password` | POST | Set spend password (stored as pbkdf2 hash) |
-| `/api/wallet/prepare-unlock` | POST | Verify password + create Circle transfer challenge → challengeId |
+| `/api/wallet/verify-password` | POST | Verify spend password |
+| `/api/wallet/prepare-unlock` | POST | Verify password + submit DCW transfer + record unlock |
+| `/api/wallet/balance` | GET | Live USDC balance via Circle DCW token balance API |
+| `/api/wallet/refresh` | POST | No-op (returns refreshFailed for email-auth users) |
+
+---
+
+## On-Chain Proof
+
+Every signal unlock is recorded on ARC-TESTNET. Judges can verify any transaction at:
+
+**[https://testnet.arcscan.app](https://testnet.arcscan.app)** (Blockscout)
+
+- Transaction: `https://testnet.arcscan.app/tx/{txHash}`
+- Contract: `https://testnet.arcscan.app/address/0x722e0b499FedCE47a90Df7837405003B203dF417`
+
+The signal detail page shows the full transaction hash and a "View on Arc Explorer →" button.
 
 ---
 
@@ -180,7 +197,7 @@ WebSocket: `ws://alphachef.site/ws` — real-time push on `new_signal` and `sign
 - Node.js 18+
 - PM2: `npm install -g pm2`
 - nginx
-- Circle developer account + API key
+- Circle developer account (API key + App ID + registered entity secret)
 
 ### Environment
 
@@ -192,12 +209,14 @@ Required variables:
 
 ```env
 CIRCLE_API_KEY=...
-CIRCLE_APP_ID=...              # from Circle developer console
+CIRCLE_APP_ID=...               # from Circle developer console
+CIRCLE_ENTITY_SECRET=...        # entity secret registered with Circle for DCW
 GROQ_API_KEY=...
-PLATFORM_WALLET=0x5b1704075058260e19692ad395b3ebdB4022453F  # receives USDC from signal unlocks
-CONTRACT_ADDRESS=0x722e0b499FedCE47a90Df7837405003B203dF417   # AlphaChef on Arc testnet
+PLATFORM_WALLET=0x...           # receives USDC from signal unlocks
+CONTRACT_ADDRESS=0x722e0b499FedCE47a90Df7837405003B203dF417
 AGENT_SECRET=your-secret-here
-ARC_RPC_URL=...                # Arc testnet RPC URL
+ARC_RPC_URL=...                 # Arc testnet RPC URL
+ARC_USDC_ADDRESS=0x3600000000000000000000000000000000000000
 ```
 
 Also set in `frontend/.env`:
@@ -216,12 +235,8 @@ cd frontend && npm run build
 ### Start services with PM2
 
 ```bash
-# Wallet microservice on port 3015
 pm2 start backend/wallet-server.js --name alphachef-wallet
-
-# Main backend on port 3012
 PORT=3012 pm2 start backend/server.js --name alphachef-backend
-
 pm2 save && pm2 startup
 ```
 
@@ -248,6 +263,7 @@ sudo systemctl reload nginx
 |------|------|------|
 | `alphachef-wallet` | `backend/wallet-server.js` | 3015 |
 | `alphachef-backend` | `backend/server.js` | 3012 |
+| `alphachef-agent` | `backend/agent.js` | — |
 
 ---
 
@@ -258,15 +274,15 @@ Single SQLite file at `backend/alphachef.db`, shared by both servers.
 | Table | Purpose |
 |-------|---------|
 | `signals` | Published alpha signals |
-| `unlocks` | Payment records (wallet → signal, tx_hash) |
-| `wallet_users` | Circle user accounts (email, circle_user_id, wallet_address, password_hash) |
+| `unlocks` | Payment records — `tx_hash` prefixed `dcw:` for developer-controlled transfers |
+| `wallet_users` | Circle user accounts (email, arc_wallet_id, arc_wallet_address, arc_wallet_set_id, password_hash) |
 | `agent_logs` | Agent activity log |
 
 ---
 
 ## Business Model
 
-AlphaChef is a fully autonomous signal business. The AI agent publishes all signals. All USDC payments go to the platform wallet.
+AlphaChef is a fully autonomous signal business. The AI agent publishes all signals. All USDC payments flow to the platform wallet.
 
 | Revenue Stream | Rate |
 |---------------|------|
@@ -274,7 +290,7 @@ AlphaChef is a fully autonomous signal business. The AI agent publishes all sign
 | Platform fee (Phase 2) | 10% of each payment |
 | Agent earnings | 100% to platform wallet at launch |
 
-In phase 4 of the roadmap Alpha callers can publish their signals on the AlphaChef platform and earn 90% revenue while 10% goes to the platfrorm.
+In phase 4 of the roadmap, Alpha callers can publish their own signals on the AlphaChef platform and earn 90% revenue while 10% goes to the platform.
 
 ---
 

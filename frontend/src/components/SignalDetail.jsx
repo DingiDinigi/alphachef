@@ -98,7 +98,7 @@ export default function SignalDetail({ signal, onClose }) {
                 </span>
               </div>
               <a
-                href={`https://explorer.testnet.arc.fun/tx/${signal.tx_hash}`}
+                href={`https://testnet.arcscan.app/tx/${signal.tx_hash}`}
                 target="_blank"
                 rel="noreferrer"
                 style={{
