@@ -23,6 +23,9 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--whi
 
 @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.3;transform:scale(.7)} }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+@keyframes orbitSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes signalPulse { 0%,100%{opacity:.25;transform:scale(.75)} 50%{opacity:1;transform:scale(1.35)} }
+@keyframes globeGlowPulse { 0%,100%{opacity:.75} 50%{opacity:1} }
 
 .animate-pulse-dot { animation: pulse 2s infinite; }
 .animate-blink { animation: blink 1s infinite; }

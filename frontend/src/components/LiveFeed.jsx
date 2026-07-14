@@ -29,11 +29,7 @@ export default function LiveFeed({ signals, onUnlock, onOpen, wallet, id, previe
               {preview ? <>Latest <em style={{ fontStyle: 'italic', color: 'var(--gold)' }}>Signals</em></> : <>Live <em style={{ fontStyle: 'italic', color: 'var(--gold)' }}>Signal Feed</em></>}
             </h2>
           </div>
-          {preview ? (
-            <Link to="/feed" style={{ fontSize: 13, fontWeight: 600, color: 'var(--gold)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
-              View Live Feed →
-            </Link>
-          ) : (
+          {!preview && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--green)', fontFamily: '"JetBrains Mono", monospace' }}>
               <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--green)', display: 'inline-block' }} className="animate-pulse-dot" />
               Agent Active
@@ -96,7 +92,7 @@ export default function LiveFeed({ signals, onUnlock, onOpen, wallet, id, previe
                       background: 'var(--gold)', color: '#0a0a08', border: 'none',
                       borderRadius: 100, padding: '9px 16px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
                     }}>
-                      Unlock — ${signal.price_usdc}
+                      Unlock Agent Analysis
                     </button>
                   )}
                 </div>

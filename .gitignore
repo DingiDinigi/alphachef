@@ -9,3 +9,8 @@ typechain-types/
 .claude/settings.local.json
 contracts/.env
 .env
+*.bak*
+*.save
+recovery_file_*.dat
+apply_alphachef_fixes*.py
+fix_roadmap.py

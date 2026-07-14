@@ -1,4 +1,4 @@
-require('dotenv').config({ path: '../.env' });
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const express = require('express');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
@@ -63,6 +63,7 @@ db.exec(`
 
 // Ensure password_hash column exists (wallet-server.js owns wallet_users schema)
 try { db.exec('ALTER TABLE wallet_users ADD COLUMN password_hash TEXT'); } catch (_) {}
+try { db.exec('ALTER TABLE signals ADD COLUMN verdict TEXT'); } catch (_) {}
 
 // Circle UCW client
 const circleClient = process.env.CIRCLE_API_KEY
@@ -119,6 +120,7 @@ function signalToTeaser(s, walletAddress) {
     teaser: s.teaser,
     full_analysis: unlocked ? s.full_analysis : null,
     agent_reasoning: unlocked ? s.agent_reasoning : null,
+    verdict: unlocked ? s.verdict : null,
     confidence: s.confidence,
     price_usdc: s.price_usdc,
     sources: JSON.parse(s.sources),
@@ -136,7 +138,7 @@ app.post('/api/signals', (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { title, teaser, full_analysis, agent_reasoning, confidence, price_usdc, sources, token, tx_hash, contract_signal_id } = req.body;
+  const { title, teaser, full_analysis, agent_reasoning, verdict, confidence, price_usdc, sources, token, tx_hash, contract_signal_id } = req.body;
 
   if (!title || !teaser || !full_analysis || !confidence) {
     return res.status(400).json({ error: 'Missing required fields' });
@@ -144,9 +146,9 @@ app.post('/api/signals', (req, res) => {
 
   const id = uuidv4();
   db.prepare(`
-    INSERT INTO signals (id, title, teaser, full_analysis, agent_reasoning, confidence, price_usdc, sources, token, tx_hash, contract_signal_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, title, teaser, full_analysis, agent_reasoning || '', confidence, price_usdc || 0.01, JSON.stringify(sources || []), token || null, tx_hash || null, contract_signal_id || null);
+    INSERT INTO signals (id, title, teaser, full_analysis, agent_reasoning, verdict, confidence, price_usdc, sources, token, tx_hash, contract_signal_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, title, teaser, full_analysis, agent_reasoning || '', verdict || '', confidence, price_usdc || 0.01, JSON.stringify(sources || []), token || null, tx_hash || null, contract_signal_id || null);
 
   const signal = db.prepare('SELECT * FROM signals WHERE id = ?').get(id);
   broadcast({ type: 'new_signal', signal: signalToTeaser(signal, null) });

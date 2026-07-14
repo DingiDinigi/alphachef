@@ -7,6 +7,7 @@ import SignalDetail from './components/SignalDetail';
 import LandingPage from './pages/LandingPage';
 import FeedPage from './pages/FeedPage';
 import ProfilePage from './pages/ProfilePage';
+import DocsPage from './pages/DocsPage';
 
 export default function App() {
   const { address: wagmiAddress } = useAccount();
@@ -184,6 +185,7 @@ export default function App() {
         <Route path="/" element={<LandingPage {...pageProps} />} />
         <Route path="/feed" element={<FeedPage {...pageProps} />} />
         <Route path="/profile" element={<ProfilePage wallet={wallet} balanceUsdc={balanceUsdc} onWalletOpen={() => setWalletOpen(true)} onDisconnect={disconnectWallet} />} />
+        <Route path="/docs" element={<DocsPage wallet={wallet} balanceUsdc={balanceUsdc} onWalletOpen={() => setWalletOpen(true)} onDisconnect={disconnectWallet} />} />
       </Routes>
 
       {walletOpen && (

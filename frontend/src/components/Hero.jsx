@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 
 function GlobeCanvas() {
   const canvasRef = useRef(null);
@@ -148,7 +149,7 @@ function GlobeCanvas() {
   return (
     <canvas
       ref={canvasRef}
-      style={{ width: '100%', maxWidth: 520, aspectRatio: '1', display: 'block' }}
+      style={{ width: '100%', maxWidth: 520, aspectRatio: '1', display: 'block', filter: 'drop-shadow(0 0 40px rgba(201,162,39,0.35)) drop-shadow(0 0 90px rgba(201,162,39,0.18))' }}
     />
   );
 }
@@ -165,7 +166,7 @@ export default function Hero({ onBrowse, stats }) {
     <section style={{
       minHeight: '100vh',
       background: `
-        radial-gradient(ellipse 70% 55% at 68% 38%, rgba(201,162,39,0.07) 0%, transparent 65%),
+        radial-gradient(ellipse 85% 70% at 68% 38%, rgba(201,162,39,0.10) 0%, rgba(201,162,39,0.03) 50%, transparent 78%),
         radial-gradient(ellipse 50% 40% at 20% 80%, rgba(201,162,39,0.03) 0%, transparent 60%),
         #0a0a08
       `,
@@ -279,10 +280,8 @@ export default function Hero({ onBrowse, stats }) {
               Browse Signals
             </button>
 
-            <a
-              href="https://github.com/DingiDingi/alphachef"
-              target="_blank"
-              rel="noreferrer"
+            <Link
+              to="/docs"
               style={{
                 color: 'rgba(240,237,230,0.40)',
                 fontSize: 14,
@@ -296,7 +295,7 @@ export default function Hero({ onBrowse, stats }) {
               onMouseLeave={e => (e.currentTarget.style.color = 'rgba(240,237,230,0.40)')}
             >
               Read the Docs&nbsp;→
-            </a>
+            </Link>
           </div>
         </div>
 
@@ -307,15 +306,53 @@ export default function Hero({ onBrowse, stats }) {
           justifyContent: 'center',
           position: 'relative',
         }}>
-          {/* Backdrop radial glow */}
+          {/* Ambient glow — no hard clip, fades all the way to nothing so it
+              blends into the page instead of reading as a bounded shape */}
           <div style={{
             position: 'absolute',
-            inset: '-25%',
-            background: 'radial-gradient(circle, rgba(201,162,39,0.11) 0%, rgba(201,162,39,0.04) 45%, transparent 72%)',
-            borderRadius: '50%',
+            inset: '-90%',
+            background: 'radial-gradient(circle, rgba(224,185,58,0.15) 0%, rgba(201,162,39,0.09) 25%, rgba(201,162,39,0.045) 45%, rgba(201,162,39,0.018) 65%, rgba(201,162,39,0.006) 82%, transparent 100%)',
             pointerEvents: 'none',
+            animation: 'globeGlowPulse 6s ease-in-out infinite',
           }} />
-          <GlobeCanvas />
+
+          <div style={{ position: 'relative', width: '100%', maxWidth: 520, aspectRatio: '1' }}>
+            <GlobeCanvas />
+
+            {/* Orbiting signal pings — glowing dots circling the globe */}
+            {[0, 1, 2, 3, 4].map(i => {
+              const duration = 16 + i * 5;
+              const reverse = i % 2 === 1;
+              const radiusPct = 44 - i * 4;
+              const size = 5 - (i % 3 === 0 ? 0 : 1);
+              return (
+                <div
+                  key={i}
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    animation: `orbitSpin ${duration}s linear infinite`,
+                    animationDirection: reverse ? 'reverse' : 'normal',
+                    pointerEvents: 'none',
+                  }}
+                >
+                  <div style={{
+                    position: 'absolute',
+                    top: `${50 - radiusPct}%`,
+                    left: '50%',
+                    width: size,
+                    height: size,
+                    borderRadius: '50%',
+                    background: '#f0d876',
+                    transform: 'translateX(-50%)',
+                    boxShadow: '0 0 8px 3px rgba(224,185,58,0.9), 0 0 18px 6px rgba(201,162,39,0.45)',
+                    animation: `signalPulse ${2.2 + i * 0.35}s ease-in-out infinite`,
+                    animationDelay: `${i * 0.4}s`,
+                  }} />
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
 

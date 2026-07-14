@@ -5,7 +5,6 @@ import GettingStarted from '../components/GettingStarted';
 import LiveFeed from '../components/LiveFeed';
 import AgentSection from '../components/AgentSection';
 import Roadmap from '../components/Roadmap';
-import Stats from '../components/Stats';
 import FAQ from '../components/FAQ';
 import Footer from '../components/Footer';
 
@@ -20,7 +19,7 @@ export default function LandingPage({ wallet, signals, stats, balanceUsdc, onWal
       <HowItWorks />
       <GettingStarted onConnect={onWalletOpen} />
       <LiveFeed
-        signals={signals.slice(0, 3)}
+        signals={signals.slice(0, 6)}
         onUnlock={onUnlock}
         onOpen={onOpen}
         wallet={wallet}
@@ -29,7 +28,6 @@ export default function LandingPage({ wallet, signals, stats, balanceUsdc, onWal
       />
       <AgentSection logs={stats.agent_logs} />
       <Roadmap />
-      <Stats stats={stats} />
       <FAQ />
       <Footer />
     </div>

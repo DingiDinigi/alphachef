@@ -56,9 +56,17 @@ export default function SignalDetail({ signal, onClose }) {
 
         <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '2.5px', textTransform: 'uppercase', color: 'var(--gold)', marginBottom: 14 }}>Full Analysis</div>
         <div style={{ fontSize: 15, color: 'rgba(240,237,230,.68)', lineHeight: 1.85 }}>
-          {(signal.full_analysis || '').split('\n').filter(l => l.trim()).map((line, i) => (
-            <p key={i} style={{ marginBottom: 15 }}>{line.replace(/^#+\s*/, '')}</p>
-          ))}
+          {(signal.full_analysis || '').split('\n').filter(l => l.trim()).map((line, i) => {
+            const isHeading = /^##\s+/.test(line);
+            if (isHeading) {
+              return (
+                <div key={i} style={{ fontSize: 12, fontWeight: 800, letterSpacing: 1.5, textTransform: 'uppercase', color: 'rgba(240,237,230,.42)', marginTop: i === 0 ? 0 : 26, marginBottom: 10 }}>
+                  {line.replace(/^##\s+/, '')}
+                </div>
+              );
+            }
+            return <p key={i} style={{ marginBottom: 15 }}>{line}</p>;
+          })}
         </div>
 
         {signal.agent_reasoning && (
@@ -70,6 +78,13 @@ export default function SignalDetail({ signal, onClose }) {
                 {line}
               </div>
             ))}
+          </div>
+        )}
+
+        {signal.verdict && (
+          <div style={{ background: 'rgba(255,255,255,.03)', border: '1px solid var(--border)', borderLeft: '3px solid var(--gold)', borderRadius: 8, padding: '18px 22px', margin: '20px 0 28px' }}>
+            <h4 style={{ fontSize: 10, fontWeight: 800, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--gold)', marginBottom: 10 }}>AI Verdict</h4>
+            <p style={{ fontSize: 14, color: 'rgba(240,237,230,.75)', lineHeight: 1.6, margin: 0 }}>{signal.verdict}</p>
           </div>
         )}
 

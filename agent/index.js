@@ -1,4 +1,4 @@
-require('dotenv').config({ path: '../.env' });
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const axios = require('axios');
 const cron = require('node-cron');
 const { ethers } = require('ethers');
@@ -62,7 +62,7 @@ async function checkSmartMoney() {
     if (!provider) return null;
 
     const blockNumber = await provider.getBlockNumber();
-    const block = await provider.getBlock(blockNumber, true);
+    const block = await provider.getBlock(blockNumber);
 
     const signals = [];
 
@@ -208,7 +208,7 @@ async function checkSocialMomentum() {
   }
 }
 
-// Source 7: GitHub commit activity
+// Source 7: GitHub commit activity — REAL data via the public GitHub API
 async function checkGithubActivity() {
   try {
     const repos = [
@@ -218,18 +218,38 @@ async function checkGithubActivity() {
       { name: 'celestiaorg/celestia-core', token: 'TIA' },
     ];
 
-    if (Math.random() > 0.8) {
-      const repo = repos[Math.floor(Math.random() * repos.length)];
-      const commits = 5 + Math.floor(Math.random() * 20);
-      return {
-        source: 'github_activity',
-        token: repo.token,
-        detail: `${repo.name} had ${commits} commits in last 4h after 3 weeks dormant — major update incoming`,
-        strength: commits > 15 ? 3 : 2,
-      };
-    }
-    return null;
+    const repo = repos[Math.floor(Math.random() * repos.length)];
+    const now = Date.now();
+    const fourHoursAgo = new Date(now - 4 * 60 * 60 * 1000).toISOString();
+    const threeWeeksAgo = new Date(now - 21 * 24 * 60 * 60 * 1000).toISOString();
+
+    const ghHeaders = { 'User-Agent': 'AlphaChef-Agent' };
+    if (process.env.GITHUB_TOKEN) ghHeaders['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+
+    const recentResp = await axios.get(
+      `https://api.github.com/repos/${repo.name}/commits`,
+      { params: { since: fourHoursAgo, per_page: 100 }, headers: ghHeaders, timeout: 8000 }
+    );
+    const recentCommits = recentResp.data.length;
+
+    if (recentCommits < 5) return null; // not enough recent activity to matter
+
+    const priorResp = await axios.get(
+      `https://api.github.com/repos/${repo.name}/commits`,
+      { params: { since: threeWeeksAgo, until: fourHoursAgo, per_page: 10 }, headers: ghHeaders, timeout: 8000 }
+    );
+    const wasDormant = priorResp.data.length <= 2; // near-zero activity before this burst
+
+    if (!wasDormant) return null; // steady active repo, not a notable spike
+
+    return {
+      source: 'github_activity',
+      token: repo.token,
+      detail: `${repo.name} had ${recentCommits} commits in last 4h after ~3 weeks dormant — major update incoming`,
+      strength: recentCommits > 15 ? 3 : 2,
+    };
   } catch (e) {
+    await log('WARN', `GitHub activity check failed: ${e.message}`);
     return null;
   }
 }
@@ -260,88 +280,110 @@ const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_
 
 function buildFallbackTitle(signals, token) {
   const primary = signals[0];
-  const detail = primary?.detail || '';
-  const amountMatch = detail.match(/\$[\d,.]+[KMBk]?/);
-  const percentMatch = detail.match(/[-\d.]+%/);
-  const countMatch = detail.match(/\d+\s+(?:commits?|wallets?|transactions?)/i);
-  const metric = amountMatch?.[0] || percentMatch?.[0] || countMatch?.[0] || '';
   const sourceLabels = {
-    smart_money: 'Whale Accumulation',
-    token_accumulation: 'Unusual Accumulation',
-    liquidity_event: 'New Liquidity Pool',
-    bridge_activity: 'Capital Inflow',
-    funding_rate: 'Funding Rate Anomaly',
-    social_momentum: 'Social Spike',
-    github_activity: 'Dev Activity Surge',
-    exchange_flows: 'Exchange Flow Alert',
+    smart_money: 'Whale Wallets Are Moving',
+    token_accumulation: 'Quiet Accumulation Underway',
+    liquidity_event: 'New Liquidity Just Landed',
+    bridge_activity: 'Capital Is Flowing In',
+    funding_rate: 'Funding Just Snapped',
+    social_momentum: 'The Timeline Noticed First',
+    github_activity: 'Something Shipped Overnight',
+    exchange_flows: 'Exchange Balances Are Shifting',
   };
-  const action = sourceLabels[primary?.source] || 'Alpha Signal';
-  return metric
-    ? `$${token} ${action} — ${metric} (${signals.length} Sources)`
-    : `$${token} ${action} Detected — ${signals.length} Corroborating Sources`;
+  const action = sourceLabels[primary?.source] || 'Something Is Happening';
+  return `$${token}: ${action}`;
+}
+
+function buildFallback(signals, token, confidence) {
+  const sourceSummary = signals.map(s => `- ${s.source}: ${s.detail}`).join('\n');
+  return {
+    title: buildFallbackTitle(signals, token),
+    teaser: `Multiple independent sources just lit up around $${token} at the same time...`,
+    full_analysis: `## What Happened\n${sourceSummary}\n\n## Why It Matters\nMultiple independent sources converging on the same token at the same time is the signal — no single data point here is conclusive on its own.`,
+    agent_reasoning: signals.map(s => `Independent confirmation from ${s.source.replace(/_/g, ' ')} reduces the odds this is noise or a single-source false positive.`).join('\n'),
+    verdict: `${confidence === 'HIGH' ? 'Moderate' : 'Low'} Conviction — generated from raw signal data; full model reasoning was unavailable for this report.`,
+    confidence,
+  };
+}
+
+function isCuriositySafe(text) {
+  if (!text) return false;
+  if (/\d/.test(text)) return false;   // no numbers, percentages, or counts
+  if (/[\[\]]/.test(text)) return false; // no confidence-tier brackets like [HIGH]
+  return true;
 }
 
 async function writeAnalysis(signals) {
-  const sourceSummary = signals.map(s => `- ${s.source}: ${s.detail}`).join('\n');
+  const sourceSummary = signals.map(s => `- [${s.source}] ${s.detail} (strength ${s.strength}/3)`).join('\n');
   const token = signals[0]?.token || 'UNKNOWN';
   const totalStrength = signals.reduce((sum, s) => sum + s.strength, 0);
+  const confidence = totalStrength >= 6 ? 'HIGH' : totalStrength >= 4 ? 'MEDIUM' : 'LOW';
+  const sourceCount = signals.length;
 
   if (!groq) {
-    const confidence = totalStrength >= 6 ? 'HIGH' : totalStrength >= 4 ? 'MEDIUM' : 'LOW';
-    return {
-      title: buildFallbackTitle(signals, token),
-      teaser: `${signals[0]?.detail?.slice(0, 120)}...`,
-      full_analysis: `## Analysis\n\nOur autonomous agent has detected corroborating signals across ${signals.length} independent sources:\n\n${sourceSummary}\n\n## What This Means\n\nWhen multiple independent sources confirm the same directional bias, it significantly reduces noise and increases signal quality. The convergence of ${signals.map(s => s.source).join(', ')} creates a high-conviction setup.\n\n## Risk Factors\n\n- On-chain data has inherent delays\n- Social signals can be manufactured\n- Always size positions appropriately`,
-      agent_reasoning: signals.map(s => s.detail).join('\n'),
-      confidence,
-    };
+    return buildFallback(signals, token, confidence);
   }
 
-  try {
-    const prompt = `You are AlphaChef, an on-chain alpha signal analyst. Write a concise alpha signal report.
+  const lengthGuidance = sourceCount >= 4
+    ? '4-5 sections — this is a major, multi-source convergence, give it full analytical depth.'
+    : sourceCount === 3
+    ? '2-3 sections — solid convergence, moderate depth. Do not pad it out.'
+    : '1-2 sections — a simple two-source signal. Keep it short. A short report is correct here, not a failure.';
 
-DETECTED SIGNALS:
+  const prompt = `You are AlphaChef, an autonomous on-chain signal analyst. Write like Bloomberg Intelligence, Nansen Research, or Arkham Intelligence — concise, confident, analytical. Never write like a blog or like ChatGPT. Every sentence must add new information; never restate the same fact twice across sections.
+
+DETECTED SIGNALS (raw data — do not just repeat this back verbatim):
 ${sourceSummary}
 
-TOKEN: ${token}
-NUMBER OF CORROBORATING SOURCES: ${signals.length}
-TOTAL SIGNAL STRENGTH: ${totalStrength}/9
+TOKEN: $${token}
+CORROBORATING SOURCES: ${sourceCount}
+CONFIDENCE TIER: ${confidence}
 
-Write:
-1. A punchy, data-driven title (under 80 chars). REQUIREMENTS: must include the $TOKEN symbol with $ prefix, at least one specific number or metric from the signals above, and a concrete action verb describing what is happening.
-   GOOD examples: "3 Whale Wallets Accumulating $EIGEN — $4.2M in 48hrs", "$ETH Shorts Squeezed — Funding Rate Hits -8.4%", "$850K Liquidity Pool Opens for $ARC on Arc DEX", "18 Commits in 6hrs Signal $TIA Protocol Upgrade"
-   BAD examples: "HIGH: USDC — 2 Sources Converging", "Strong Alpha Signal on ETH", "Medium Confidence: Multiple Sources", "Token Signal Detected"
-2. A teaser (1 sentence, the hook, ends with "...")
-3. Full analysis (3-4 paragraphs, plain English, specific numbers, actionable)
-4. Confidence: ${totalStrength >= 6 ? 'HIGH' : totalStrength >= 4 ? 'MEDIUM' : 'LOW'}
+Return a JSON object with exactly these fields:
 
-Format as JSON: { "title": "...", "teaser": "...", "full_analysis": "...", "confidence": "HIGH|MEDIUM|LOW" }`;
+"title" — under 80 chars. Must create CURIOSITY that something notable is happening to $${token}, WITHOUT revealing direction (bullish/bearish), the conclusion, or specific numbers. Think Bloomberg terminal headline, not a data dump.
+  GOOD: "$${token} Is Suddenly Everyone's Problem", "Something Is Building Under $${token}"
+  BAD (gives away the analysis): "3 Whale Wallets Accumulating $${token} — $4.2M in 48hrs", "HIGH: $${token} — 2 Sources Converging"
 
+"teaser" — exactly ONE sentence. Confirms something happened. Reveals zero specifics on direction, magnitude, or conclusion. Should make someone want to know what. End with "..." or no punctuation.
+
+"sections" — an array of {"heading": "...", "body": "..."} objects. ${lengthGuidance} Headings are 2-4 words (e.g. "What Happened", "Why It Matters", "The Setup", "What Could Go Wrong"). Bodies are 2-4 dense sentences. First section states facts plainly; later sections explain significance — do not just re-list the raw signals.
+
+"agent_reasoning" — newline-separated, one line per source. For EACH source explain WHY it moves conviction — the underlying market logic — not what the data literally says (that's already covered in sections).
+  Write like: "Large liquidity additions typically signal serious market participants entering, not retail speculation."
+  Not like: "$557K liquidity pool was created" (that's just restating the fact).
+
+"verdict" — one or two sentences. Must start with "High Conviction", "Moderate Conviction", or "Low Conviction", then a dash, then the reasoning for that specific level. This is about signal quality, not a price prediction — never sound certain about market direction.
+  Example: "Moderate Conviction — two independent sources agree, but funding-rate data alone has a history of false positives."
+
+Respond with ONLY the JSON object, no markdown fences, no commentary.`;
+
+  try {
     const completion = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: 'json_object' },
-      max_tokens: 800,
+      max_tokens: 1200,
     });
 
     const result = JSON.parse(completion.choices[0].message.content);
+    const sections = Array.isArray(result.sections) ? result.sections : [];
+    const full_analysis = sections.map(s => `## ${s.heading}\n${s.body}`).join('\n\n');
+
+    const safeTitle = isCuriositySafe(result.title) ? result.title : buildFallbackTitle(signals, token);
+    const safeTeaser = isCuriositySafe(result.teaser) ? result.teaser : `Multiple sources just lit up around $${token}...`;
+
     return {
-      title: result.title || `Signal: ${token} — ${signals.length} sources converging`,
-      teaser: result.teaser || signals[0]?.detail,
-      full_analysis: result.full_analysis || sourceSummary,
-      agent_reasoning: signals.map(s => s.detail).join('\n'),
-      confidence: result.confidence || (totalStrength >= 6 ? 'HIGH' : totalStrength >= 4 ? 'MEDIUM' : 'LOW'),
+      title: safeTitle,
+      teaser: safeTeaser,
+      full_analysis: full_analysis || sourceSummary,
+      agent_reasoning: result.agent_reasoning || signals.map(s => s.detail).join('\n'),
+      verdict: result.verdict || `${confidence === 'HIGH' ? 'Moderate' : 'Low'} Conviction — reasoning unavailable.`,
+      confidence: ['HIGH', 'MEDIUM', 'LOW'].includes(result.confidence) ? result.confidence : confidence,
     };
   } catch (e) {
     await log('WARN', `Groq API failed: ${e.message}`);
-    const confidence = totalStrength >= 6 ? 'HIGH' : totalStrength >= 4 ? 'MEDIUM' : 'LOW';
-    return {
-      title: buildFallbackTitle(signals, token),
-      teaser: signals[0]?.detail?.slice(0, 120) + '...',
-      full_analysis: `Multiple on-chain and social sources have converged on $${token}:\n\n${sourceSummary}`,
-      agent_reasoning: signals.map(s => s.detail).join('\n'),
-      confidence,
-    };
+    return buildFallback(signals, token, confidence);
   }
 }
 
@@ -373,6 +415,7 @@ async function publishSignal(analysis, signals, priceUsdc) {
       teaser: analysis.teaser,
       full_analysis: analysis.full_analysis,
       agent_reasoning: analysis.agent_reasoning,
+      verdict: analysis.verdict,
       confidence: analysis.confidence,
       price_usdc: priceUsdc,
       sources: signals.map(s => s.source),
@@ -392,8 +435,21 @@ async function publishSignal(analysis, signals, priceUsdc) {
   }
 }
 
+const COOLDOWN_HOURS = 4;
+const CONFIDENCE_RANK = { LOW: 1, MEDIUM: 2, HIGH: 3 };
+
+async function getLastPublishedForToken(token) {
+  try {
+    const { data } = await axios.get(`${BACKEND_URL}/api/signals`, { timeout: 5000 });
+    return data.find(s => s.token === token) || null;
+  } catch (e) {
+    await log('WARN', `Could not check publish history: ${e.message}`);
+    return null; // fail open - a check failure should never block a genuine signal
+  }
+}
+
 async function runAgentLoop() {
-  await log('INFO', '🍳 AlphaChef agent loop starting...');
+  await log('INFO', '\ud83c\udf73 AlphaChef agent loop starting...');
 
   const [s1, s2, s3, s4, s5, s6, s7, s8] = await Promise.allSettled([
     checkSmartMoney(),
@@ -413,11 +469,13 @@ async function runAgentLoop() {
   await log('INFO', `Found ${rawSignals.length} raw signals`);
 
   if (rawSignals.length < 2) {
-    await log('INFO', 'Insufficient signal convergence — skipping publish');
+    await log('INFO', 'Insufficient signal convergence - skipping publish');
     return;
   }
 
-  // Group signals by token and pick highest conviction
+  // Group signals by token - only genuine multi-source convergence on the
+  // SAME token counts. Forcing together two unrelated single-source signals
+  // from different tokens is not real convergence and was inflating volume.
   const tokenGroups = {};
   for (const sig of rawSignals) {
     const token = sig.token || 'MULTI';
@@ -425,7 +483,6 @@ async function runAgentLoop() {
     tokenGroups[token].push(sig);
   }
 
-  // Find best group with 2+ sources
   let bestGroup = null;
   let bestStrength = 0;
   for (const [, sigs] of Object.entries(tokenGroups)) {
@@ -438,20 +495,38 @@ async function runAgentLoop() {
     }
   }
 
-  // If no single token has 2+ signals, take top 2 highest strength signals
   if (!bestGroup) {
-    rawSignals.sort((a, b) => b.strength - a.strength);
-    bestGroup = rawSignals.slice(0, 2);
+    await log('INFO', 'No genuine multi-source convergence on any single token - skipping publish (quality over volume)');
+    return;
   }
 
+  const bestToken = bestGroup[0].token || 'MULTI';
   const totalStrength = bestGroup.reduce((sum, s) => sum + s.strength, 0);
   const confidence = totalStrength >= 6 ? 'HIGH' : totalStrength >= 4 ? 'MEDIUM' : 'LOW';
+
+  // Cooldown - don't re-announce the same token repeatedly unless the new
+  // read is a genuine escalation in confidence tier.
+  const lastForToken = await getLastPublishedForToken(bestToken);
+  if (lastForToken && lastForToken.created_at) {
+    const hoursSince = (Date.now() - new Date(lastForToken.created_at).getTime()) / (1000 * 60 * 60);
+    const isEscalating = CONFIDENCE_RANK[confidence] > (CONFIDENCE_RANK[lastForToken.confidence] || 0);
+    if (hoursSince < COOLDOWN_HOURS && !isEscalating) {
+      await log('INFO', `Cooldown active for $${bestToken} (${hoursSince.toFixed(1)}h since last signal, not escalating) - skipping to avoid repetitive noise`);
+      return;
+    }
+  }
+
   const priceMap = { HIGH: 0.05, MEDIUM: 0.03, LOW: 0.01 };
   const priceUsdc = priceMap[confidence];
 
-  await log('INFO', `Publishing ${confidence} signal from ${bestGroup.length} sources — $${priceUsdc} USDC`);
+  await log('INFO', `Publishing ${confidence} signal from ${bestGroup.length} sources - $${priceUsdc} USDC`);
 
-  const analysis = await writeAnalysis(bestGroup);
+  // Reserve Groq calls for signals worth writing about - LOW tier uses the
+  // clean fallback template instead of spending API budget on it.
+  const analysis = confidence === 'LOW'
+    ? buildFallback(bestGroup, bestToken, confidence)
+    : await writeAnalysis(bestGroup);
+
   await publishSignal(analysis, bestGroup, priceUsdc);
 }
 
