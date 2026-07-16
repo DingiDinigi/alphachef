@@ -14,3 +14,4 @@ contracts/.env
 recovery_file_*.dat
 apply_alphachef_fixes*.py
 fix_roadmap.py
+.git.backup/

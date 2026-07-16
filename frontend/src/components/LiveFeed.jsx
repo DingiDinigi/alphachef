@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import Reveal from './Reveal';
 
 const BADGE_STYLES = {
   HIGH: { background: 'rgba(201,162,39,.12)', color: 'var(--gold)', border: '1px solid rgba(201,162,39,.26)' },
@@ -22,7 +23,7 @@ function timeAgo(ts) {
 export default function LiveFeed({ signals, onUnlock, onOpen, wallet, id, preview }) {
   return (
     <section id={id || 'feed'} style={{ padding: '120px 60px', background: 'var(--bg)', borderTop: '1px solid var(--border)' }}>
-      <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+      <div style={{ maxWidth: 1400, margin: '0 auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 48, flexWrap: 'wrap', gap: 16 }}>
           <div>
             <h2 style={{ fontFamily: '"Playfair Display", serif', fontSize: 'clamp(28px,4vw,50px)', fontWeight: 400 }}>
@@ -44,8 +45,9 @@ export default function LiveFeed({ signals, onUnlock, onOpen, wallet, id, previe
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16 }}>
-            {signals.map(signal => (
-              <div key={signal.id}
+            {signals.map((signal, i) => (
+              <Reveal key={signal.id} delay={i * 0.08}>
+              <div
                 onClick={() => onOpen(signal)}
                 style={{
                   background: 'var(--bg2)', borderRadius: 16, padding: 24, cursor: 'pointer',
@@ -97,6 +99,7 @@ export default function LiveFeed({ signals, onUnlock, onOpen, wallet, id, previe
                   )}
                 </div>
               </div>
+              </Reveal>
             ))}
           </div>
         )}

@@ -1,3 +1,5 @@
+import Reveal from './Reveal';
+
 const SOURCES = [
   { icon: '🐋', label: 'Smart Money Wallet Tracker' },
   { icon: '📊', label: 'Token Accumulation Detector' },
@@ -12,7 +14,8 @@ const SOURCES = [
 export default function AgentSection({ logs }) {
   return (
     <section id="the-agent" style={{ padding: '120px 60px', background: 'var(--bg2)', borderTop: '1px solid var(--border)' }}>
-      <div style={{ maxWidth: 1180, margin: '0 auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 72, alignItems: 'center' }}>
+      <div style={{ maxWidth: 1400, margin: '0 auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 72, alignItems: 'center' }}>
+        <Reveal>
         <div>
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: 'uppercase', color: 'var(--dim)', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ width: 24, height: 2, background: 'var(--gold)', borderRadius: 2, flexShrink: 0, display: 'inline-block' }} />
@@ -29,7 +32,8 @@ export default function AgentSection({ logs }) {
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
             {SOURCES.map((src, i) => (
-              <div key={i} style={{
+              <Reveal key={i} delay={i * 0.05} y={10}>
+              <div style={{
                 display: 'flex', alignItems: 'center', gap: 13, padding: '12px 16px',
                 background: 'var(--bg3)', borderRadius: 11, border: '1px solid var(--border)',
                 fontSize: 13, fontWeight: 600,
@@ -38,10 +42,13 @@ export default function AgentSection({ logs }) {
                 <span style={{ flex: 1 }}>{src.label}</span>
                 <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase', color: 'var(--green)', fontFamily: '"JetBrains Mono", monospace' }}>● Live</span>
               </div>
+              </Reveal>
             ))}
           </div>
         </div>
+        </Reveal>
 
+        <Reveal delay={0.15}>
         <div style={{ background: 'var(--bg)', borderRadius: 14, padding: 22, border: '1px solid var(--border)', fontFamily: '"JetBrains Mono", monospace', fontSize: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 18 }}>
             {['#ef4444','#eab308','#22c55e'].map(c => (
@@ -68,6 +75,7 @@ export default function AgentSection({ logs }) {
             )}
           </div>
         </div>
+        </Reveal>
       </div>
     </section>
   );

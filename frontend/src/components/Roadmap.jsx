@@ -1,3 +1,5 @@
+import Reveal from './Reveal';
+
 const phases = [
   {
     phase: 'Phase 01 · July 2026', live: true, dot: 'live',
@@ -37,7 +39,8 @@ export default function Roadmap() {
         </p>
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {phases.map((phase, i) => (
-            <div key={i} style={{ display: 'flex', gap: 26, padding: '28px 0', borderBottom: i < phases.length - 1 ? '1px solid var(--border)' : 'none' }}>
+            <Reveal key={i} delay={i * 0.1} y={16}>
+            <div style={{ display: 'flex', gap: 26, padding: '28px 0', borderBottom: i < phases.length - 1 ? '1px solid var(--border)' : 'none' }}>
               <div style={{ paddingTop: 4, flexShrink: 0 }}>
                 <div style={{
                   width: 13, height: 13, borderRadius: '50%',
@@ -66,6 +69,7 @@ export default function Roadmap() {
                 </div>
               </div>
             </div>
+            </Reveal>
           ))}
         </div>
       </div>

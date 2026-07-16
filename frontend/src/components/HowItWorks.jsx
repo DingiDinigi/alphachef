@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import Reveal from './Reveal';
 
 function WavyCanvas({ index }) {
   const ref = useRef(null);
@@ -44,7 +45,7 @@ const cards = [
 export default function HowItWorks() {
   return (
     <section id="how-it-works" style={{ padding: '120px 60px', background: 'var(--bg2)', borderTop: '1px solid var(--border)' }}>
-      <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+      <div style={{ maxWidth: 1400, margin: '0 auto' }}>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 3, textTransform: 'uppercase', color: 'var(--dim)', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ width: 24, height: 2, background: 'var(--gold)', borderRadius: 2, flexShrink: 0, display: 'inline-block' }} />
           How It Works
@@ -57,9 +58,13 @@ export default function HowItWorks() {
         </p>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 18 }}>
           {cards.map((card, i) => (
-            <div key={i} style={{
+            <Reveal key={i} delay={i * 0.1}>
+            <div
+              onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.borderColor = 'rgba(201,162,39,.4)'; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.borderColor = 'var(--card-border)'; }}
+              style={{
               background: 'var(--card)', borderRadius: 16, overflow: 'hidden',
-              border: '1px solid var(--card-border)',
+              border: '1px solid var(--card-border)', transition: 'transform 0.3s ease, border-color 0.3s ease',
             }}>
               <div style={{ width: '100%', height: 144, position: 'relative', overflow: 'hidden' }}>
                 <WavyCanvas index={i} />
@@ -76,6 +81,7 @@ export default function HowItWorks() {
                 <p style={{ fontSize: 12.5, color: 'rgba(240,237,230,.3)', lineHeight: 1.65 }}>{card.desc}</p>
               </div>
             </div>
+            </Reveal>
           ))}
         </div>
       </div>

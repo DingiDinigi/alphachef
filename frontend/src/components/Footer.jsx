@@ -1,7 +1,7 @@
 export default function Footer() {
   return (
     <footer style={{ padding: '60px 60px', background: 'var(--bg)', borderTop: '1px solid var(--border)' }}>
-      <div style={{ maxWidth: 1200, margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 24 }}>
+      <div style={{ maxWidth: 1400, margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 24 }}>
         <div>
           <div style={{ fontFamily: '"Playfair Display", serif', fontSize: 19, fontWeight: 700, marginBottom: 8 }}>AlphaChef</div>
           <p style={{ fontSize: 13, color: 'var(--dim)', maxWidth: 300, lineHeight: 1.6 }}>
