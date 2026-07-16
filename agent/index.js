@@ -104,7 +104,7 @@ async function checkSmartMoney() {
 // Source 2: Token accumulation anomalies (simulated DEX data)
 async function checkTokenAccumulation() {
   try {
-    const mockTokens = ['EIGEN', 'ARB', 'OP', 'MATIC', 'AVAX', 'SEI', 'TIA'];
+    const mockTokens = ['BTC', 'ETH', 'SOL', 'ARB', 'OP', 'AVAX', 'TIA', 'EIGEN', 'DOGE', 'LINK'];
     const token = mockTokens[Math.floor(Math.random() * mockTokens.length)];
     const buyPressure = 60 + Math.random() * 40; // 60-100%
 
@@ -128,7 +128,7 @@ async function checkLiquidityEvents() {
     const random = Math.random();
     if (random > 0.7) { // 30% chance of event
       const liquidityUsd = 100000 + Math.random() * 900000;
-      const tokens = ['NEWTOKEN/USDC', 'LAUNCH/USDC', 'GEM/USDC', 'ALPHA/USDC'];
+      const tokens = ['NEWTOKEN/USDC', 'LAUNCH/USDC', 'ARB/USDC', 'OP/USDC', 'AVAX/USDC', 'TIA/USDC'];
       const pair = tokens[Math.floor(Math.random() * tokens.length)];
 
       return {
@@ -168,7 +168,7 @@ async function checkBridgeActivity() {
 // Source 5: Funding rate anomalies
 async function checkFundingRates() {
   try {
-    const tokens = ['BTC', 'ETH', 'SOL', 'ARB', 'DOGE'];
+    const tokens = ['BTC', 'ETH', 'SOL', 'ARB', 'OP', 'AVAX', 'TIA', 'EIGEN', 'DOGE', 'LINK'];
     const token = tokens[Math.floor(Math.random() * tokens.length)];
     const rate = (Math.random() - 0.5) * 0.2; // -10% to +10% annualized
 
@@ -190,7 +190,11 @@ async function checkFundingRates() {
 // Source 6: Social momentum (simulated keyword detection)
 async function checkSocialMomentum() {
   try {
-    const keywords = ['$EIGEN', '$ARB launch', '$OP airdrop', 'Circle USDC', 'Arc testnet', '$TIA staking'];
+    const keywords = [
+      '$BTC ETF flows', '$ETH staking', '$SOL network activity', '$ARB launch', '$OP airdrop',
+      '$AVAX subnets', '$TIA staking', '$EIGEN restaking', '$DOGE community', '$LINK oracle',
+      'Circle USDC', 'Arc testnet',
+    ];
     const keyword = keywords[Math.floor(Math.random() * keywords.length)];
     const spikePct = 200 + Math.random() * 800;
 
@@ -212,10 +216,22 @@ async function checkSocialMomentum() {
 async function checkGithubActivity() {
   try {
     const repos = [
-      { name: 'eigenlayer/eigenlayer-contracts', token: 'EIGEN' },
+      { name: 'Layr-Labs/eigenlayer-contracts', token: 'EIGEN' },
       { name: 'OffchainLabs/arbitrum', token: 'ARB' },
       { name: 'ethereum-optimism/optimism', token: 'OP' },
       { name: 'celestiaorg/celestia-core', token: 'TIA' },
+      { name: 'ava-labs/avalanchego', token: 'AVAX' },
+      { name: 'sei-protocol/sei-chain', token: 'SEI' },
+      { name: 'paritytech/polkadot-sdk', token: 'DOT' },
+      { name: 'near/nearcore', token: 'NEAR' },
+      { name: 'InjectiveFoundation/injective-core', token: 'INJ' },
+      { name: 'MystenLabs/sui', token: 'SUI' },
+      { name: 'aptos-labs/aptos-core', token: 'APT' },
+      { name: 'smartcontractkit/chainlink', token: 'LINK' },
+      { name: 'Uniswap/v4-core', token: 'UNI' },
+      { name: 'aave/aave-v3-core', token: 'AAVE' },
+      { name: 'cosmos/cosmos-sdk', token: 'ATOM' },
+      { name: 'filecoin-project/lotus', token: 'FIL' },
     ];
 
     const repo = repos[Math.floor(Math.random() * repos.length)];
@@ -258,7 +274,7 @@ async function checkGithubActivity() {
 async function checkExchangeFlows() {
   try {
     if (Math.random() > 0.75) {
-      const tokens = ['BTC', 'ETH', 'SOL'];
+      const tokens = ['BTC', 'ETH', 'SOL', 'ARB', 'OP', 'AVAX', 'TIA', 'EIGEN', 'DOGE', 'LINK'];
       const token = tokens[Math.floor(Math.random() * tokens.length)];
       const amount = 1000 + Math.random() * 9000;
       const isInflow = Math.random() > 0.5;

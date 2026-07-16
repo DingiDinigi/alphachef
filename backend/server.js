@@ -169,6 +169,29 @@ app.get('/api/signals/:id', (req, res) => {
   res.json(signalToTeaser(signal, wallet));
 });
 
+// Free A2MCP endpoint for OKX.AI ASP registration — returns recent signal
+// teasers as a standardized, agent-consumable JSON feed. No payment required;
+// this is the "just return the result" free-tier pattern OKX.AI expects for
+// A2MCP services. Full analysis still requires a paid unlock (see /api/unlock).
+app.get('/api/mcp/signals', (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+  const signals = db.prepare('SELECT * FROM signals ORDER BY created_at DESC LIMIT ?').all(limit);
+  res.json({
+    service: 'AlphaChef Signal Feed',
+    description: 'Autonomous AI agent monitoring 8 on-chain and social sources for genuine multi-source token convergence. Returns recent signal teasers - full analysis and AI verdict require a paid unlock via Circle x402 on Arc testnet.',
+    count: signals.length,
+    signals: signals.map(s => ({
+      id: s.id,
+      title: s.title,
+      teaser: s.teaser,
+      token: s.token,
+      confidence: s.confidence,
+      unlock_price_usdc: s.price_usdc,
+      published_at: s.created_at,
+    })),
+  });
+});
+
 app.post('/api/unlock', async (req, res) => {
   const signal_id = req.body.signal_id || req.body.signalId;
   const wallet_address = req.body.wallet_address || req.body.walletAddress;
