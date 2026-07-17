@@ -104,20 +104,46 @@ async function checkSmartMoney() {
 // Source 2: Token accumulation anomalies (simulated DEX data)
 async function checkTokenAccumulation() {
   try {
-    const mockTokens = ['BTC', 'ETH', 'SOL', 'ARB', 'OP', 'AVAX', 'TIA', 'EIGEN', 'DOGE', 'LINK'];
-    const token = mockTokens[Math.floor(Math.random() * mockTokens.length)];
-    const buyPressure = 60 + Math.random() * 40; // 60-100%
+    const tokens = ['BTC', 'ETH', 'SOL', 'ARB', 'OP', 'AVAX', 'MATIC', 'SEI', 'TIA', 'EIGEN', 'DOGE', 'LINK', 'UNI', 'AAVE', 'DOT', 'NEAR', 'INJ', 'SUI', 'APT', 'ATOM'];
+    const token = tokens[Math.floor(Math.random() * tokens.length)];
+
+    // Real DEX buy/sell data via DexScreener's public API - no key required.
+    const resp = await axios.get('https://api.dexscreener.com/latest/dex/search', {
+      params: { q: token },
+      timeout: 8000,
+    });
+
+    // Only exact ticker matches - the search endpoint also returns unrelated
+    // tokens that just happen to share the same symbol.
+    const matches = (resp.data?.pairs || []).filter(p => p.baseToken?.symbol?.toUpperCase() === token);
+    if (matches.length === 0) return null;
+
+    // Rank by 24h VOLUME, not liquidity - liquidity can be spoofed cheaply
+    // (fake pools routinely show huge liquidity with almost no real trading),
+    // while sustained volume is much harder to fake and better reflects which
+    // pair is the actual, legitimate market for this token.
+    const best = matches.reduce((a, b) => (b.volume?.h24 || 0) > (a.volume?.h24 || 0) ? b : a, matches[0]);
+    const txns = best.txns?.h1;
+    if (!txns) return null;
+
+    const buys = txns.buys || 0;
+    const sells = txns.sells || 0;
+    const total = buys + sells;
+    if (total < 20) return null; // not enough real activity to mean anything
+
+    const buyPressure = (buys / total) * 100;
 
     if (buyPressure > 80) {
       return {
         source: 'token_accumulation',
         token,
-        detail: `$${token} DEX buy pressure at ${buyPressure.toFixed(1)}% over last 2h — unusual accumulation pattern`,
+        detail: `$${token} DEX buy pressure at ${buyPressure.toFixed(1)}% over last hour (${buys} buys vs ${sells} sells on ${best.dexId}) — unusual accumulation pattern`,
         strength: buyPressure > 90 ? 3 : 2,
       };
     }
     return null;
   } catch (e) {
+    await log('WARN', `Token accumulation check failed: ${e.message}`);
     return null;
   }
 }
@@ -168,21 +194,59 @@ async function checkBridgeActivity() {
 // Source 5: Funding rate anomalies
 async function checkFundingRates() {
   try {
-    const tokens = ['BTC', 'ETH', 'SOL', 'ARB', 'OP', 'AVAX', 'TIA', 'EIGEN', 'DOGE', 'LINK'];
+    const tokens = ['BTC', 'ETH', 'SOL', 'ARB', 'OP', 'AVAX', 'MATIC', 'SEI', 'TIA', 'EIGEN', 'DOGE', 'LINK', 'UNI', 'AAVE', 'DOT', 'NEAR', 'INJ', 'SUI', 'APT', 'ATOM'];
     const token = tokens[Math.floor(Math.random() * tokens.length)];
-    const rate = (Math.random() - 0.5) * 0.2; // -10% to +10% annualized
+    const symbol = `${token}USDT`;
 
-    if (Math.abs(rate) > 0.05) {
-      const direction = rate > 0 ? 'positive' : 'negative';
+    // Real funding rate data from a randomly chosen major exchange each call -
+    // no key required for any of these three. If the picked exchange doesn't
+    // have a perpetual for this token, we get null and move on, same as any
+    // other source's error handling.
+    const exchanges = [
+      {
+        name: 'Binance',
+        fetch: async () => {
+          const resp = await axios.get('https://fapi.binance.com/fapi/v1/premiumIndex', { params: { symbol }, timeout: 8000 });
+          return parseFloat(resp.data.lastFundingRate);
+        },
+      },
+      {
+        name: 'Bybit',
+        fetch: async () => {
+          const resp = await axios.get('https://api.bybit.com/v5/market/tickers', { params: { category: 'linear', symbol }, timeout: 8000 });
+          const item = resp.data?.result?.list?.[0];
+          return item ? parseFloat(item.fundingRate) : NaN;
+        },
+      },
+      {
+        name: 'OKX',
+        fetch: async () => {
+          const instId = `${token}-USDT-SWAP`;
+          const resp = await axios.get('https://www.okx.com/api/v5/public/funding-rate', { params: { instId }, timeout: 8000 });
+          const item = resp.data?.data?.[0];
+          return item ? parseFloat(item.fundingRate) : NaN;
+        },
+      },
+    ];
+
+    const exchange = exchanges[Math.floor(Math.random() * exchanges.length)];
+    const rate8h = await exchange.fetch();
+    if (Number.isNaN(rate8h)) return null;
+
+    const annualized = rate8h * 3 * 365; // all three settle funding 3x/day
+
+    if (Math.abs(annualized) > 0.10) {
+      const direction = annualized > 0 ? 'positive' : 'negative';
       return {
         source: 'funding_rate',
         token,
-        detail: `$${token} perp funding rate hits ${(rate * 100).toFixed(2)}% (${direction}) — ${rate > 0 ? 'heavy long bias, potential squeeze' : 'shorts dominant, reversal possible'}`,
-        strength: Math.abs(rate) > 0.08 ? 3 : 2,
+        detail: `$${token} perp funding rate on ${exchange.name} hits ${(annualized * 100).toFixed(2)}% annualized (${direction}) — ${annualized > 0 ? 'heavy long bias, potential squeeze' : 'shorts dominant, reversal possible'}`,
+        strength: Math.abs(annualized) > 0.20 ? 3 : 2,
       };
     }
     return null;
   } catch (e) {
+    await log('WARN', `Funding rate check failed: ${e.message}`);
     return null;
   }
 }
@@ -274,7 +338,7 @@ async function checkGithubActivity() {
 async function checkExchangeFlows() {
   try {
     if (Math.random() > 0.75) {
-      const tokens = ['BTC', 'ETH', 'SOL', 'ARB', 'OP', 'AVAX', 'TIA', 'EIGEN', 'DOGE', 'LINK'];
+      const tokens = ['BTC', 'ETH', 'SOL', 'ARB', 'OP', 'AVAX', 'MATIC', 'SEI', 'TIA', 'EIGEN', 'DOGE', 'LINK', 'UNI', 'AAVE', 'DOT', 'NEAR', 'INJ', 'SUI', 'APT', 'ATOM'];
       const token = tokens[Math.floor(Math.random() * tokens.length)];
       const amount = 1000 + Math.random() * 9000;
       const isInflow = Math.random() > 0.5;
@@ -417,6 +481,7 @@ async function registerOnChain(signalId, priceUsdc6) {
 }
 
 async function publishSignal(analysis, signals, priceUsdc) {
+  await log('INFO', `DIAGNOSTIC: analysis.verdict = ${JSON.stringify(analysis.verdict)} | typeof = ${typeof analysis.verdict} | title = ${analysis.title}`);
   const signalId = uuidv4();
   const priceUsdc6 = BigInt(Math.round(priceUsdc * 1_000_000)); // 6 decimals
 

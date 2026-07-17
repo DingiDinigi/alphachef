@@ -49,6 +49,7 @@ export default function Nav({ onWalletOpen, onDisconnect, wallet, balanceUsdc })
       borderBottom: '1px solid var(--border)',
     }}>
       <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: 11, textDecoration: 'none' }}>
+        <img src="/alphachef-logo.png" alt="AlphaChef" style={{ height: 38, width: 'auto', display: 'block' }} />
         <span style={{ fontFamily: '"Playfair Display", serif', fontSize: 19, fontWeight: 700, color: 'var(--white)', letterSpacing: '-0.3px' }}>
           AlphaChef
         </span>

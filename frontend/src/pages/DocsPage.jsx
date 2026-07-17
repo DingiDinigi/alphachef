@@ -213,10 +213,6 @@ export default function DocsPage({ wallet, balanceUsdc, onWalletOpen, onDisconne
             </div>
           </Card>
         </Section>
-
-        <div style={{ padding: '48px 0 0', color: 'var(--dim)', fontSize: 13, fontStyle: 'italic' }}>
-          Built for the Lepton Hackathon — Circle × Canteen.
-        </div>
       </div>
 
       <Footer />
