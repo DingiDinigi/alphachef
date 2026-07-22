@@ -26,6 +26,8 @@ body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--whi
 @keyframes orbitSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 @keyframes signalPulse { 0%,100%{opacity:.25;transform:scale(.75)} 50%{opacity:1;transform:scale(1.35)} }
 @keyframes globeGlowPulse { 0%,100%{opacity:.75} 50%{opacity:1} }
+@keyframes terminalLineIn { 0%{opacity:0;transform:translateX(-6px);background:rgba(201,162,39,.14)} 60%{opacity:1;transform:translateX(0)} 100%{background:transparent} }
+.terminal-line-in { animation: terminalLineIn 1.2s ease-out; }
 
 .animate-pulse-dot { animation: pulse 2s infinite; }
 .animate-blink { animation: blink 1s infinite; }

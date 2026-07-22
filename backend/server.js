@@ -176,19 +176,30 @@ app.get('/api/signals/:id', (req, res) => {
 app.get('/api/mcp/signals', (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 10, 50);
   const signals = db.prepare('SELECT * FROM signals ORDER BY created_at DESC LIMIT ?').all(limit);
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const mostRecentAgeHours = signals.length > 0
+    ? Math.round((nowSec - signals[0].created_at) / 3600 * 10) / 10
+    : null;
+
   res.json({
     service: 'AlphaChef Signal Feed',
-    description: 'Autonomous AI agent monitoring 8 on-chain and social sources for genuine multi-source token convergence. Returns recent signal teasers - full analysis and AI verdict require a paid unlock via Circle x402 on Arc testnet.',
+    description: 'Autonomous AI agent monitoring 8 on-chain and social sources for genuine multi-source token convergence. Publishes only on real, verified convergence - not on a fixed schedule, so gaps between signals reflect market conditions, not downtime. Returns recent signal teasers - full analysis and AI verdict require a paid unlock via Circle x402 on Arc testnet.',
     count: signals.length,
-    signals: signals.map(s => ({
-      id: s.id,
-      title: s.title,
-      teaser: s.teaser,
-      token: s.token,
-      confidence: s.confidence,
-      unlock_price_usdc: s.price_usdc,
-      published_at: s.created_at,
-    })),
+    most_recent_signal_age_hours: mostRecentAgeHours,
+    signals: signals.map(s => {
+      const ageHours = Math.round((nowSec - s.created_at) / 3600 * 10) / 10;
+      return {
+        id: s.id,
+        title: s.title,
+        teaser: s.teaser,
+        token: s.token,
+        confidence: s.confidence,
+        unlock_price_usdc: s.price_usdc,
+        published_at: s.created_at,
+        age_hours: ageHours,
+      };
+    }),
   });
 });
 

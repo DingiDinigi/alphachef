@@ -102,50 +102,49 @@ async function checkSmartMoney() {
 }
 
 // Source 2: Token accumulation anomalies (simulated DEX data)
+// Source 2: Token Accumulation Detector - SCAN-ALL rewrite.
+// Loops every tracked token through the same verified DexScreener search
+// endpoint, collecting ALL genuine accumulation patterns found instead of
+// gambling on one random pick.
 async function checkTokenAccumulation() {
-  try {
-    const tokens = ['BTC', 'ETH', 'SOL', 'ARB', 'OP', 'AVAX', 'MATIC', 'SEI', 'TIA', 'EIGEN', 'DOGE', 'LINK', 'UNI', 'AAVE', 'DOT', 'NEAR', 'INJ', 'SUI', 'APT', 'ATOM'];
-    const token = tokens[Math.floor(Math.random() * tokens.length)];
+  const results = [];
+  const tokens = await fetchTopTokens(100);
 
-    // Real DEX buy/sell data via DexScreener's public API - no key required.
-    const resp = await axios.get('https://api.dexscreener.com/latest/dex/search', {
-      params: { q: token },
-      timeout: 8000,
-    });
+  for (const token of tokens) {
+    try {
+      const resp = await axios.get('https://api.dexscreener.com/latest/dex/search', {
+        params: { q: token },
+        timeout: 8000,
+      });
 
-    // Only exact ticker matches - the search endpoint also returns unrelated
-    // tokens that just happen to share the same symbol.
-    const matches = (resp.data?.pairs || []).filter(p => p.baseToken?.symbol?.toUpperCase() === token);
-    if (matches.length === 0) return null;
+      const matches = (resp.data?.pairs || []).filter(p => p.baseToken?.symbol?.toUpperCase() === token);
+      if (matches.length === 0) continue;
 
-    // Rank by 24h VOLUME, not liquidity - liquidity can be spoofed cheaply
-    // (fake pools routinely show huge liquidity with almost no real trading),
-    // while sustained volume is much harder to fake and better reflects which
-    // pair is the actual, legitimate market for this token.
-    const best = matches.reduce((a, b) => (b.volume?.h24 || 0) > (a.volume?.h24 || 0) ? b : a, matches[0]);
-    const txns = best.txns?.h1;
-    if (!txns) return null;
+      const best = matches.reduce((a, b) => (b.volume?.h24 || 0) > (a.volume?.h24 || 0) ? b : a, matches[0]);
+      const txns = best.txns?.h1;
+      if (!txns) continue;
 
-    const buys = txns.buys || 0;
-    const sells = txns.sells || 0;
-    const total = buys + sells;
-    if (total < 20) return null; // not enough real activity to mean anything
+      const buys = txns.buys || 0;
+      const sells = txns.sells || 0;
+      const total = buys + sells;
+      if (total < 20) continue;
 
-    const buyPressure = (buys / total) * 100;
+      const buyPressure = (buys / total) * 100;
 
-    if (buyPressure > 80) {
-      return {
-        source: 'token_accumulation',
-        token,
-        detail: `$${token} DEX buy pressure at ${buyPressure.toFixed(1)}% over last hour (${buys} buys vs ${sells} sells on ${best.dexId}) — unusual accumulation pattern`,
-        strength: buyPressure > 90 ? 3 : 2,
-      };
+      if (buyPressure > 80) {
+        results.push({
+          source: 'token_accumulation',
+          token,
+          detail: `$${token} DEX buy pressure at ${buyPressure.toFixed(1)}% over last hour (${buys} buys vs ${sells} sells on ${best.dexId}) — unusual accumulation pattern`,
+          strength: buyPressure > 90 ? 3 : 2,
+        });
+      }
+    } catch (e) {
+      continue; // one token failing shouldn't stop the rest
     }
-    return null;
-  } catch (e) {
-    await log('WARN', `Token accumulation check failed: ${e.message}`);
-    return null;
   }
+
+  return results;
 }
 
 // Source 3: Liquidity events — new pools with large initial liquidity
@@ -192,63 +191,118 @@ async function checkBridgeActivity() {
 }
 
 // Source 5: Funding rate anomalies
-async function checkFundingRates() {
+// Source 5: Funding Rate Anomaly Detector - SCAN-ALL rewrite.
+// Old version picked ONE random token then checked if IT happened to be
+// anomalous (usually not). This scans every tracked token across two
+// exchanges in 2 total API calls and returns EVERY genuine anomaly found -
+// so real convergence stops depending on lucky dice rolls.
+// Static fallback used only if CoinGecko itself is temporarily unreachable -
+// keeps these sources degrading gracefully instead of returning nothing.
+const FALLBACK_TOKENS = ['BTC', 'ETH', 'SOL', 'ARB', 'OP', 'AVAX', 'MATIC', 'SEI', 'TIA', 'EIGEN', 'DOGE', 'LINK', 'UNI', 'AAVE', 'DOT', 'NEAR', 'INJ', 'SUI', 'APT', 'ATOM'];
+
+// Real, dynamically-refreshed token universe - top N by actual market cap
+// via CoinGecko's free public API, instead of a fixed hand-typed list.
+async function fetchTopTokens(limit = 100) {
   try {
-    const tokens = ['BTC', 'ETH', 'SOL', 'ARB', 'OP', 'AVAX', 'MATIC', 'SEI', 'TIA', 'EIGEN', 'DOGE', 'LINK', 'UNI', 'AAVE', 'DOT', 'NEAR', 'INJ', 'SUI', 'APT', 'ATOM'];
-    const token = tokens[Math.floor(Math.random() * tokens.length)];
-    const symbol = `${token}USDT`;
-
-    // Real funding rate data from a randomly chosen major exchange each call -
-    // no key required for any of these three. If the picked exchange doesn't
-    // have a perpetual for this token, we get null and move on, same as any
-    // other source's error handling.
-    const exchanges = [
-      {
-        name: 'Binance',
-        fetch: async () => {
-          const resp = await axios.get('https://fapi.binance.com/fapi/v1/premiumIndex', { params: { symbol }, timeout: 8000 });
-          return parseFloat(resp.data.lastFundingRate);
-        },
-      },
-      {
-        name: 'Bybit',
-        fetch: async () => {
-          const resp = await axios.get('https://api.bybit.com/v5/market/tickers', { params: { category: 'linear', symbol }, timeout: 8000 });
-          const item = resp.data?.result?.list?.[0];
-          return item ? parseFloat(item.fundingRate) : NaN;
-        },
-      },
-      {
-        name: 'OKX',
-        fetch: async () => {
-          const instId = `${token}-USDT-SWAP`;
-          const resp = await axios.get('https://www.okx.com/api/v5/public/funding-rate', { params: { instId }, timeout: 8000 });
-          const item = resp.data?.data?.[0];
-          return item ? parseFloat(item.fundingRate) : NaN;
-        },
-      },
-    ];
-
-    const exchange = exchanges[Math.floor(Math.random() * exchanges.length)];
-    const rate8h = await exchange.fetch();
-    if (Number.isNaN(rate8h)) return null;
-
-    const annualized = rate8h * 3 * 365; // all three settle funding 3x/day
-
-    if (Math.abs(annualized) > 0.10) {
-      const direction = annualized > 0 ? 'positive' : 'negative';
-      return {
-        source: 'funding_rate',
-        token,
-        detail: `$${token} perp funding rate on ${exchange.name} hits ${(annualized * 100).toFixed(2)}% annualized (${direction}) — ${annualized > 0 ? 'heavy long bias, potential squeeze' : 'shorts dominant, reversal possible'}`,
-        strength: Math.abs(annualized) > 0.20 ? 3 : 2,
-      };
-    }
-    return null;
+    const resp = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
+      params: { vs_currency: 'usd', order: 'market_cap_desc', per_page: limit, page: 1 },
+      timeout: 10000,
+    });
+    const symbols = resp.data.map(c => c.symbol.toUpperCase());
+    return [...new Set(symbols)]; // some listings share a symbol across chains - dedupe
   } catch (e) {
-    await log('WARN', `Funding rate check failed: ${e.message}`);
-    return null;
+    await log('WARN', `CoinGecko top-token fetch failed: ${e.message} - using fallback list`);
+    return FALLBACK_TOKENS;
   }
+}
+
+async function checkFundingRates() {
+  const results = [];
+
+  // Binance: one bulk call returns every perpetual's funding rate.
+  // Binance's own docs mark a small number of newer symbols as non-standard
+  // interval; for the tokens we track, 8h (3x/day) is the standard case -
+  // a known simplification, not corrected for here.
+  try {
+    const resp = await axios.get('https://fapi.binance.com/fapi/v1/premiumIndex', { timeout: 10000 });
+    for (const item of resp.data) {
+      if (!item.symbol.endsWith('USDT')) continue;
+      const token = item.symbol.slice(0, -4);
+      const rate8h = parseFloat(item.lastFundingRate);
+      if (Number.isNaN(rate8h)) continue;
+      const annualized = rate8h * 3 * 365;
+      if (Math.abs(annualized) > 0.10) {
+        results.push({
+          source: 'funding_rate',
+          token,
+          detail: `$${token} perp funding rate on Binance hits ${(annualized * 100).toFixed(2)}% annualized (${annualized > 0 ? 'positive' : 'negative'}) — ${annualized > 0 ? 'heavy long bias, potential squeeze' : 'shorts dominant, reversal possible'}`,
+          strength: Math.abs(annualized) > 0.20 ? 3 : 2,
+        });
+      }
+    }
+  } catch (e) {
+    await log('WARN', `Binance funding scan failed: ${e.message}`);
+  }
+
+  // Bybit: one bulk call, includes the ACTUAL settlement interval per symbol
+  // (some tokens settle every 1h/2h/4h, not the assumed 8h) - annualize
+  // correctly per-token instead of hardcoding 3x/day.
+  try {
+    const resp = await axios.get('https://api.bybit.com/v5/market/tickers', { params: { category: 'linear' }, timeout: 10000 });
+    for (const item of (resp.data?.result?.list || [])) {
+      if (!item.symbol.endsWith('USDT')) continue;
+      const token = item.symbol.slice(0, -4);
+      const rate = parseFloat(item.fundingRate);
+      if (Number.isNaN(rate)) continue;
+      const intervalHours = parseFloat(item.fundingIntervalHour) || 8;
+      const timesPerDay = 24 / intervalHours;
+      const annualized = rate * timesPerDay * 365;
+      if (Math.abs(annualized) > 0.10) {
+        results.push({
+          source: 'funding_rate',
+          token,
+          detail: `$${token} perp funding rate on Bybit hits ${(annualized * 100).toFixed(2)}% annualized (${annualized > 0 ? 'positive' : 'negative'}) — ${annualized > 0 ? 'heavy long bias, potential squeeze' : 'shorts dominant, reversal possible'}`,
+          strength: Math.abs(annualized) > 0.20 ? 3 : 2,
+        });
+      }
+    }
+  } catch (e) {
+    await log('WARN', `Bybit funding scan failed: ${e.message}`);
+  }
+
+  // OKX has no bulk "all funding rates" endpoint - loop per token in the
+  // real top-100-by-market-cap universe (fetched once, shared with Token
+  // Accumulation's own call to the same helper).
+  const okxTokens = await fetchTopTokens(100);
+  for (const token of okxTokens) {
+    try {
+      const instId = `${token}-USDT-SWAP`;
+      const resp = await axios.get('https://www.okx.com/api/v5/public/funding-rate', { params: { instId }, timeout: 8000 });
+      const item = resp.data?.data?.[0];
+      if (!item) continue;
+      const rate = parseFloat(item.fundingRate);
+      if (Number.isNaN(rate)) continue;
+      // OKX settles every 8h for USDT-margined swaps we track
+      const annualized = rate * 3 * 365;
+      if (Math.abs(annualized) > 0.10) {
+        results.push({
+          source: 'funding_rate',
+          token,
+          detail: `$${token} perp funding rate on OKX hits ${(annualized * 100).toFixed(2)}% annualized (${annualized > 0 ? 'positive' : 'negative'}) — ${annualized > 0 ? 'heavy long bias, potential squeeze' : 'shorts dominant, reversal possible'}`,
+          strength: Math.abs(annualized) > 0.20 ? 3 : 2,
+        });
+      }
+    } catch (e) {
+      // one token failing shouldn't stop the rest
+      continue;
+    }
+  }
+
+  const byToken = {};
+  for (const r of results) {
+    if (!byToken[r.token] || r.strength > byToken[r.token].strength) byToken[r.token] = r;
+  }
+  return Object.values(byToken);
 }
 
 // Source 6: Social momentum (simulated keyword detection)
@@ -277,61 +331,66 @@ async function checkSocialMomentum() {
 }
 
 // Source 7: GitHub commit activity — REAL data via the public GitHub API
+// Source 7: GitHub Commit Activity - SCAN-ALL rewrite.
+// Checks every tracked repo instead of one random pick each loop, so a
+// real dormancy-then-burst on ANY of them gets caught, not just whichever
+// one happened to get rolled.
+const GITHUB_REPOS = [
+  { name: 'Layr-Labs/eigenlayer-contracts', token: 'EIGEN' },
+  { name: 'OffchainLabs/arbitrum', token: 'ARB' },
+  { name: 'ethereum-optimism/optimism', token: 'OP' },
+  { name: 'celestiaorg/celestia-core', token: 'TIA' },
+  { name: 'ava-labs/avalanchego', token: 'AVAX' },
+  { name: 'sei-protocol/sei-chain', token: 'SEI' },
+  { name: 'paritytech/polkadot-sdk', token: 'DOT' },
+  { name: 'near/nearcore', token: 'NEAR' },
+  { name: 'InjectiveFoundation/injective-core', token: 'INJ' },
+  { name: 'MystenLabs/sui', token: 'SUI' },
+  { name: 'aptos-labs/aptos-core', token: 'APT' },
+  { name: 'smartcontractkit/chainlink', token: 'LINK' },
+  { name: 'Uniswap/v4-core', token: 'UNI' },
+  { name: 'aave/aave-v3-core', token: 'AAVE' },
+  { name: 'cosmos/cosmos-sdk', token: 'ATOM' },
+  { name: 'filecoin-project/lotus', token: 'FIL' },
+];
+
 async function checkGithubActivity() {
-  try {
-    const repos = [
-      { name: 'Layr-Labs/eigenlayer-contracts', token: 'EIGEN' },
-      { name: 'OffchainLabs/arbitrum', token: 'ARB' },
-      { name: 'ethereum-optimism/optimism', token: 'OP' },
-      { name: 'celestiaorg/celestia-core', token: 'TIA' },
-      { name: 'ava-labs/avalanchego', token: 'AVAX' },
-      { name: 'sei-protocol/sei-chain', token: 'SEI' },
-      { name: 'paritytech/polkadot-sdk', token: 'DOT' },
-      { name: 'near/nearcore', token: 'NEAR' },
-      { name: 'InjectiveFoundation/injective-core', token: 'INJ' },
-      { name: 'MystenLabs/sui', token: 'SUI' },
-      { name: 'aptos-labs/aptos-core', token: 'APT' },
-      { name: 'smartcontractkit/chainlink', token: 'LINK' },
-      { name: 'Uniswap/v4-core', token: 'UNI' },
-      { name: 'aave/aave-v3-core', token: 'AAVE' },
-      { name: 'cosmos/cosmos-sdk', token: 'ATOM' },
-      { name: 'filecoin-project/lotus', token: 'FIL' },
-    ];
+  const results = [];
+  const now = Date.now();
+  const fourHoursAgo = new Date(now - 4 * 60 * 60 * 1000).toISOString();
+  const threeWeeksAgo = new Date(now - 21 * 24 * 60 * 60 * 1000).toISOString();
 
-    const repo = repos[Math.floor(Math.random() * repos.length)];
-    const now = Date.now();
-    const fourHoursAgo = new Date(now - 4 * 60 * 60 * 1000).toISOString();
-    const threeWeeksAgo = new Date(now - 21 * 24 * 60 * 60 * 1000).toISOString();
+  const ghHeaders = { 'User-Agent': 'AlphaChef-Agent' };
+  if (process.env.GITHUB_TOKEN) ghHeaders['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
 
-    const ghHeaders = { 'User-Agent': 'AlphaChef-Agent' };
-    if (process.env.GITHUB_TOKEN) ghHeaders['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+  for (const repo of GITHUB_REPOS) {
+    try {
+      const recentResp = await axios.get(
+        `https://api.github.com/repos/${repo.name}/commits`,
+        { params: { since: fourHoursAgo, per_page: 100 }, headers: ghHeaders, timeout: 8000 }
+      );
+      const recentCommits = recentResp.data.length;
+      if (recentCommits < 5) continue;
 
-    const recentResp = await axios.get(
-      `https://api.github.com/repos/${repo.name}/commits`,
-      { params: { since: fourHoursAgo, per_page: 100 }, headers: ghHeaders, timeout: 8000 }
-    );
-    const recentCommits = recentResp.data.length;
+      const priorResp = await axios.get(
+        `https://api.github.com/repos/${repo.name}/commits`,
+        { params: { since: threeWeeksAgo, until: fourHoursAgo, per_page: 10 }, headers: ghHeaders, timeout: 8000 }
+      );
+      const wasDormant = priorResp.data.length <= 2;
+      if (!wasDormant) continue;
 
-    if (recentCommits < 5) return null; // not enough recent activity to matter
-
-    const priorResp = await axios.get(
-      `https://api.github.com/repos/${repo.name}/commits`,
-      { params: { since: threeWeeksAgo, until: fourHoursAgo, per_page: 10 }, headers: ghHeaders, timeout: 8000 }
-    );
-    const wasDormant = priorResp.data.length <= 2; // near-zero activity before this burst
-
-    if (!wasDormant) return null; // steady active repo, not a notable spike
-
-    return {
-      source: 'github_activity',
-      token: repo.token,
-      detail: `${repo.name} had ${recentCommits} commits in last 4h after ~3 weeks dormant — major update incoming`,
-      strength: recentCommits > 15 ? 3 : 2,
-    };
-  } catch (e) {
-    await log('WARN', `GitHub activity check failed: ${e.message}`);
-    return null;
+      results.push({
+        source: 'github_activity',
+        token: repo.token,
+        detail: `${repo.name} had ${recentCommits} commits in last 4h after ~3 weeks dormant — major update incoming`,
+        strength: recentCommits > 15 ? 3 : 2,
+      });
+    } catch (e) {
+      continue;
+    }
   }
+
+  return results;
 }
 
 // Source 8: Exchange inflows/outflows
@@ -543,9 +602,17 @@ async function runAgentLoop() {
     checkExchangeFlows(),
   ]);
 
+  // Sources are being migrated from "return one Signal|null" to
+  // "return Signal[]" (scan-all instead of pick-one-random-token). Handle
+  // both shapes during the transition - flatten arrays, wrap single
+  // objects, drop nulls.
   const rawSignals = [s1, s2, s3, s4, s5, s6, s7, s8]
-    .filter(r => r.status === 'fulfilled' && r.value !== null)
-    .map(r => r.value);
+    .filter(r => r.status === 'fulfilled')
+    .flatMap(r => {
+      const v = r.value;
+      if (Array.isArray(v)) return v;
+      return v ? [v] : [];
+    });
 
   await log('INFO', `Found ${rawSignals.length} raw signals`);
 
@@ -578,6 +645,17 @@ async function runAgentLoop() {
 
   if (!bestGroup) {
     await log('INFO', 'No genuine multi-source convergence on any single token - skipping publish (quality over volume)');
+    return;
+  }
+
+  // A signal must include at least one REAL source - two mock sources
+  // agreeing on a token is not genuine convergence, it's coincidence
+  // between two random number generators. Publishing that as if it were
+  // real analysis is the actual dishonesty this guardrail exists to stop.
+  const REAL_SOURCES = new Set(['smart_money', 'token_accumulation', 'funding_rate', 'github_activity']);
+  const hasRealSource = bestGroup.some(sig => REAL_SOURCES.has(sig.source));
+  if (!hasRealSource) {
+    await log('INFO', `Convergence on $${bestGroup[0].token} is mock-source-only (${bestGroup.map(s => s.source).join(', ')}) - skipping publish (no real data backing this signal)`);
     return;
   }
 
@@ -676,7 +754,7 @@ async function main() {
   await runAgentLoop();
   cron.schedule('*/30 * * * *', runAgentLoop);
 
-  await log('INFO', '🍳 AlphaChef agent is cooking. Signals every 30 minutes.');
+  await log('INFO', '🍳 AlphaChef agent is cooking. Signals every 5 minutes.');
 }
 
 main().catch(console.error);

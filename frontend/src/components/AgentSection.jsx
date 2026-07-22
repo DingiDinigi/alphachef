@@ -67,11 +67,18 @@ export default function AgentSection({ logs }) {
                 <div><span style={{ display: 'inline-block', width: 8, height: 13, background: 'var(--gold)' }} className="animate-blink" /></div>
               </>
             ) : (
-              logs.slice(0, 12).map((log, i) => (
-                <div key={i} style={{ marginBottom: 7, color: log.level === 'ERROR' ? '#ef4444' : log.level === 'WARN' ? '#eab308' : log.message.includes('✅') ? 'var(--gold)' : log.message.includes('⚡') ? 'var(--green)' : 'rgba(240,237,230,.76)' }}>
-                  {log.message}
-                </div>
-              ))
+              <>
+                {logs.slice(0, 12).map((log, i) => (
+                  <div
+                    key={i === 0 ? `latest-${log.message}` : i}
+                    className={i === 0 ? 'terminal-line-in' : ''}
+                    style={{ marginBottom: 7, color: log.level === 'ERROR' ? '#ef4444' : log.level === 'WARN' ? '#eab308' : log.message.includes('✅') ? 'var(--gold)' : log.message.includes('⚡') ? 'var(--green)' : 'rgba(240,237,230,.76)' }}
+                  >
+                    {log.message}
+                  </div>
+                ))}
+                <span style={{ display: 'inline-block', width: 8, height: 13, background: 'var(--gold)' }} className="animate-blink" />
+              </>
             )}
           </div>
         </div>

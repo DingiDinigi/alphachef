@@ -3,7 +3,7 @@ import Reveal from './Reveal';
 const steps = [
   { num: '01', title: 'Connect Wallet', desc: 'Sign in with Google or email, or connect an existing wallet directly.' },
   { num: '02', title: 'Get Testnet USDC', desc: 'Use the Circle faucet (faucet.circle.com) to get free testnet USDC for signal unlocking.' },
-  { num: '03', title: 'Browse Signals', desc: 'View live signals from the autonomous agent — new ones every 5 minutes.' },
+  { num: '03', title: 'Browse Signals', desc: 'View live signals from the autonomous agent, checking for genuine multi-source convergence around the clock.' },
   { num: '04', title: 'Unlock Alpha', desc: 'Pay $0.01–$0.05 USDC via x402 nanopayment. Full analysis opens instantly.' },
 ];
 
