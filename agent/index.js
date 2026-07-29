@@ -8,6 +8,64 @@ const { v4: uuidv4 } = require('uuid');
 const BACKEND_URL = `http://localhost:${process.env.PORT || 3011}`;
 const AGENT_SECRET = process.env.AGENT_SECRET || 'alphachef-agent-secret-2024';
 const ARC_RPC = process.env.ARC_RPC_URL || '';
+
+// --- Ethereum mainnet connection (separate from Arc) ---
+// Used for Smart Money and Bridge Activity - real whale/bridge activity
+// lives on real chains, not Arc testnet. Free, no-key public RPC.
+const MAINNET_RPC = 'https://ethereum-rpc.publicnode.com';
+let mainnetProvider = null;
+try {
+  mainnetProvider = new ethers.JsonRpcProvider(MAINNET_RPC);
+} catch (e) {
+  mainnetProvider = null;
+}
+
+// Verified real bridge contract addresses on Ethereum mainnet (cross-checked
+// against official docs / Etherscan labels + balances before shipping).
+// Expandable later - this is a starting set, not exhaustive.
+const KNOWN_BRIDGES = {
+  '0xa3a7b6f88361f48403514059f1f16c8e78d60eec': 'Arbitrum Bridge',
+  '0xbd3fa81b58ba92a82136038b25adec7066af3155': 'Circle CCTP',
+  '0x5c7bcd6e7de5423a257d81b442095a1a6ced35c5': 'Across Protocol',
+  '0x3ee18b2214aff97000d974cf647e7c347e8fa585': 'Wormhole',
+  '0x8731d54e9d02c286767d56ac03e8037c07e01e98': 'Stargate',
+};
+
+// Real, dynamically-sourced ERC-20 contract addresses for tracked tokens,
+// via CoinGecko's public data - not a hand-typed address list. Matches by
+// CoinGecko's unique coin id (not symbol, which many unrelated/scam tokens
+// collide on).
+async function fetchTrackedTokenAddresses() {
+  try {
+    const marketsResp = await axios.get('https://api.coingecko.com/api/v3/coins/markets', {
+      params: { vs_currency: 'usd', order: 'market_cap_desc', per_page: 100, page: 1 },
+      timeout: 10000,
+    });
+    const idToSymbol = {};
+    for (const c of marketsResp.data) {
+      idToSymbol[c.id] = c.symbol.toUpperCase();
+    }
+
+    const listResp = await axios.get('https://api.coingecko.com/api/v3/coins/list', {
+      params: { include_platform: true },
+      timeout: 20000,
+    });
+
+    const result = {};
+    for (const entry of listResp.data) {
+      const symbol = idToSymbol[entry.id];
+      if (!symbol) continue;
+      const ethAddress = entry.platforms?.ethereum;
+      if (ethAddress && ethAddress.length > 0) {
+        result[symbol] = ethAddress.toLowerCase();
+      }
+    }
+    return result;
+  } catch (e) {
+    await log('WARN', `Token contract address lookup failed: ${e.message}`);
+    return {};
+  }
+}
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || '';
 
 let provider;
@@ -57,48 +115,55 @@ async function log(level, message) {
 }
 
 // Source 1: Smart money wallet movements
+// Source 1: Smart Money Wallet Tracker + Source 4: Bridge Activity Scanner.
+// Both rewritten as real, on Ethereum mainnet (not Arc - real whale/bridge
+// activity for real tracked tokens doesn't happen on Arc testnet).
+// STAGE 1: native ETH transfers only. ERC-20 transfer detection (ARB,
+// LINK, etc.) needs event-log decoding and is a separate, later piece.
 async function checkSmartMoney() {
+  const results = [];
+  if (!mainnetProvider) return results;
+
   try {
-    if (!provider) return null;
+    const blockNumber = await mainnetProvider.getBlockNumber();
+    const block = await mainnetProvider.getBlock(blockNumber);
+    if (!block || !block.transactions) return results;
 
-    const blockNumber = await provider.getBlockNumber();
-    const block = await provider.getBlock(blockNumber);
+    for (const txHash of block.transactions.slice(0, 30)) {
+      try {
+        const tx = await mainnetProvider.getTransaction(txHash);
+        if (!tx || !tx.value) continue;
 
-    const signals = [];
+        const valueEth = parseFloat(ethers.formatEther(tx.value));
+        if (valueEth < 100) continue; // starting threshold - real ETH whale move
 
-    if (block && block.transactions) {
-      for (const txHash of block.transactions.slice(0, 20)) {
-        try {
-          const tx = await provider.getTransaction(txHash);
-          if (!tx) continue;
+        const toLower = (tx.to || '').toLowerCase();
+        const bridgeName = KNOWN_BRIDGES[toLower];
 
-          const fromLower = (tx.from || '').toLowerCase();
-          const toLower = (tx.to || '').toLowerCase();
-
-          const isWhale = WHALE_ADDRESSES.some(w =>
-            w.toLowerCase() === fromLower || w.toLowerCase() === toLower
-          );
-
-          if (isWhale) {
-            const valueEth = parseFloat(ethers.formatEther(tx.value || 0n));
-            if (valueEth > 5) {
-              signals.push({
-                source: 'smart_money',
-                token: 'ARC',
-                detail: `Smart money wallet ${tx.from?.slice(0,8)}... moved ${valueEth.toFixed(2)} tokens`,
-                strength: valueEth > 50 ? 3 : 2,
-              });
-            }
-          }
-        } catch (_) {}
+        if (bridgeName) {
+          results.push({
+            source: 'bridge_activity',
+            token: 'ETH',
+            detail: `${valueEth.toFixed(2)} ETH bridged via ${bridgeName} (tx ${tx.hash.slice(0, 10)}...)`,
+            strength: valueEth > 500 ? 3 : 2,
+          });
+        } else {
+          results.push({
+            source: 'smart_money',
+            token: 'ETH',
+            detail: `Wallet ${tx.from?.slice(0, 8)}... moved ${valueEth.toFixed(2)} ETH in a single transaction`,
+            strength: valueEth > 500 ? 3 : 2,
+          });
+        }
+      } catch (_) {
+        continue;
       }
     }
-
-    return signals.length > 0 ? signals[0] : null;
   } catch (e) {
-    await log('WARN', `Smart money check failed: ${e.message}`);
-    return null;
+    await log('WARN', `Smart money / bridge scan failed: ${e.message}`);
   }
+
+  return results;
 }
 
 // Source 2: Token accumulation anomalies (simulated DEX data)
@@ -148,46 +213,56 @@ async function checkTokenAccumulation() {
 }
 
 // Source 3: Liquidity events — new pools with large initial liquidity
+// Source 3: Liquidity Event Monitor - now real.
+// Reuses the same verified DexScreener call pattern as Token Accumulation,
+// checking real pairCreatedAt + liquidity.usd fields instead of buy/sell
+// ratio - genuine new pool detection across the real top-100 token universe.
 async function checkLiquidityEvents() {
-  try {
-    const random = Math.random();
-    if (random > 0.7) { // 30% chance of event
-      const liquidityUsd = 100000 + Math.random() * 900000;
-      const tokens = ['NEWTOKEN/USDC', 'LAUNCH/USDC', 'ARB/USDC', 'OP/USDC', 'AVAX/USDC', 'TIA/USDC'];
-      const pair = tokens[Math.floor(Math.random() * tokens.length)];
+  const results = [];
+  const tokens = await fetchTopTokens(100);
+  const nowMs = Date.now();
+  const fourHoursMs = 4 * 60 * 60 * 1000;
 
-      return {
-        source: 'liquidity_event',
-        token: pair.split('/')[0],
-        detail: `New ${pair} pool created with $${(liquidityUsd/1000).toFixed(0)}K initial liquidity on Arc DEX`,
-        strength: liquidityUsd > 500000 ? 3 : 2,
-      };
+  for (const token of tokens) {
+    try {
+      const resp = await axios.get('https://api.dexscreener.com/latest/dex/search', {
+        params: { q: token },
+        timeout: 8000,
+      });
+
+      const matches = (resp.data?.pairs || []).filter(p => p.baseToken?.symbol?.toUpperCase() === token);
+
+      for (const pair of matches) {
+        const liquidityUsd = pair.liquidity?.usd || 0;
+        const createdAt = pair.pairCreatedAt;
+        if (!createdAt) continue;
+
+        const ageMs = nowMs - createdAt;
+        if (ageMs > 0 && ageMs < fourHoursMs && liquidityUsd > 100000) {
+          results.push({
+            source: 'liquidity_event',
+            token,
+            detail: `New ${token}/${pair.quoteToken?.symbol || 'USD'} pool created on ${pair.dexId} (${pair.chainId}) with $${(liquidityUsd / 1000).toFixed(0)}K initial liquidity, ${(ageMs / 3600000).toFixed(1)}h ago`,
+            strength: liquidityUsd > 500000 ? 3 : 2,
+          });
+          break;
+        }
+      }
+    } catch (e) {
+      continue;
     }
-    return null;
-  } catch (e) {
-    return null;
   }
+
+  return results;
 }
 
 // Source 4: Bridge activity — USDC moving into Arc
+// Bridge Activity signals now come from checkSmartMoney()'s combined
+// mainnet scan above (it returns both smart_money and bridge_activity
+// tagged results from the same block scan) - this stays as a real no-op
+// so the existing Promise.allSettled array below doesn't need restructuring.
 async function checkBridgeActivity() {
-  try {
-    if (!provider) return null;
-
-    const random = Math.random();
-    if (random > 0.75) {
-      const amount = 100000 + Math.random() * 4900000;
-      return {
-        source: 'bridge_activity',
-        token: 'USDC',
-        detail: `$${(amount/1000000).toFixed(1)}M USDC bridged into Arc from Ethereum — institutional capital inflow`,
-        strength: amount > 2000000 ? 3 : 2,
-      };
-    }
-    return null;
-  } catch (e) {
-    return null;
-  }
+  return [];
 }
 
 // Source 5: Funding rate anomalies
@@ -394,25 +469,63 @@ async function checkGithubActivity() {
 }
 
 // Source 8: Exchange inflows/outflows
-async function checkExchangeFlows() {
-  try {
-    if (Math.random() > 0.75) {
-      const tokens = ['BTC', 'ETH', 'SOL', 'ARB', 'OP', 'AVAX', 'MATIC', 'SEI', 'TIA', 'EIGEN', 'DOGE', 'LINK', 'UNI', 'AAVE', 'DOT', 'NEAR', 'INJ', 'SUI', 'APT', 'ATOM'];
-      const token = tokens[Math.floor(Math.random() * tokens.length)];
-      const amount = 1000 + Math.random() * 9000;
-      const isInflow = Math.random() > 0.5;
+// Verified real exchange hot wallet addresses (cross-checked against
+// Etherscan labels/balances). Starting with one unambiguous, high-value
+// wallet - expandable later, same approach as the bridge address list.
+const KNOWN_EXCHANGE_WALLETS = {
+  '0xf977814e90da44bfa03b6295a0616a897441acec': 'Binance',
+};
 
-      return {
-        source: 'exchange_flows',
-        token,
-        detail: `${amount.toFixed(0)} $${token} ${isInflow ? 'moved TO' : 'withdrawn FROM'} major exchange — ${isInflow ? 'sell pressure building' : 'potential bullish signal'}`,
-        strength: amount > 7000 ? 3 : 2,
-      };
+// Source 8: Exchange Flow Monitor - now real.
+// Same mainnet block scan pattern as Smart Money/Bridge - checks whether
+// a transaction's counterparty is a known exchange wallet.
+async function checkExchangeFlows() {
+  const results = [];
+  if (!mainnetProvider) return results;
+
+  try {
+    const blockNumber = await mainnetProvider.getBlockNumber();
+    const block = await mainnetProvider.getBlock(blockNumber);
+    if (!block || !block.transactions) return results;
+
+    for (const txHash of block.transactions.slice(0, 30)) {
+      try {
+        const tx = await mainnetProvider.getTransaction(txHash);
+        if (!tx || !tx.value) continue;
+
+        const valueEth = parseFloat(ethers.formatEther(tx.value));
+        if (valueEth < 50) continue;
+
+        const fromLower = (tx.from || '').toLowerCase();
+        const toLower = (tx.to || '').toLowerCase();
+
+        const inflowExchange = KNOWN_EXCHANGE_WALLETS[toLower];
+        const outflowExchange = KNOWN_EXCHANGE_WALLETS[fromLower];
+
+        if (inflowExchange) {
+          results.push({
+            source: 'exchange_flows',
+            token: 'ETH',
+            detail: `${valueEth.toFixed(2)} ETH deposited into ${inflowExchange} — potential sell pressure building`,
+            strength: valueEth > 500 ? 3 : 2,
+          });
+        } else if (outflowExchange) {
+          results.push({
+            source: 'exchange_flows',
+            token: 'ETH',
+            detail: `${valueEth.toFixed(2)} ETH withdrawn from ${outflowExchange} — potential accumulation, bullish signal`,
+            strength: valueEth > 500 ? 3 : 2,
+          });
+        }
+      } catch (_) {
+        continue;
+      }
     }
-    return null;
   } catch (e) {
-    return null;
+    await log('WARN', `Exchange flow scan failed: ${e.message}`);
   }
+
+  return results;
 }
 
 const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
